@@ -1,0 +1,14 @@
+{
+  "name": "turtorge",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "dev": "pnpm --dir apps/desktop dev",
+    "build": "pnpm --dir apps/desktop build",
+    "test": "pnpm --dir apps/desktop test",
+    "tauri": "pnpm --dir apps/desktop tauri",
+    "tauri:dev": "pnpm --dir apps/desktop tauri dev",
+    "tauri:build": "pnpm --dir apps/desktop tauri build"
+  }
+}
+

@@ -1,0 +1,11 @@
+node_modules/
+.pnpm-store/
+target/
+dist/
+apps/desktop/dist/
+apps/desktop/node_modules/
+apps/desktop/src-tauri/target/
+.superdesign/tmp/
+*.log
+*.tsbuildinfo
+.DS_Store
