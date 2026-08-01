@@ -407,6 +407,19 @@ fn wsl_share_path_to_linux(path: &str, distribution: &str) -> Option<String> {
     None
 }
 
+pub fn wsl_path_to_unc(path: &str, distribution: &str) -> Result<String, TurtorgeError> {
+    ensure_known_distribution(distribution)?;
+    if !path.starts_with('/') {
+        return Err(TurtorgeError::InvalidWorkingDirectory(path.to_owned()));
+    }
+    let relative = path.trim_start_matches('/').replace('/', "\\");
+    Ok(if relative.is_empty() {
+        format!(r"\\wsl.localhost\{distribution}")
+    } else {
+        format!(r"\\wsl.localhost\{distribution}\{relative}")
+    })
+}
+
 fn expand_wsl_home_path(path: &str, distribution: &str) -> Result<String, TurtorgeError> {
     if path != "~" && !path.starts_with("~/") {
         return Ok(path.to_owned());
@@ -482,5 +495,14 @@ mod tests {
             wsl_share_path_to_linux(r"\\wsl.localhost\Debian\home\vince", "Ubuntu-24.04",),
             None
         );
+    }
+
+    #[test]
+    fn converts_linux_paths_to_wsl_network_share_paths() {
+        assert_eq!(
+            wsl_path_to_unc("/home/dev/project", "Ubuntu-24.04").unwrap(),
+            r"\\wsl.localhost\Ubuntu-24.04\home\dev\project"
+        );
+        assert!(wsl_path_to_unc("relative", "Ubuntu-24.04").is_err());
     }
 }

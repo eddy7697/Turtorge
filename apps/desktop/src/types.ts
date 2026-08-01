@@ -5,6 +5,57 @@ export type ShellKind = "powerShell" | "wsl";
 export type TerminalProfileKind = "shell" | "claudeCode" | "codex" | "custom";
 export type TerminalStatus = "starting" | "running" | "exited" | "failed" | "stopping";
 export type SplitDirection = "horizontal" | "vertical";
+export type LauncherDetectionMode = "auto" | "manual";
+export type LauncherIcon =
+  | "explorer"
+  | "vsCode"
+  | "cursor"
+  | "antigravity"
+  | "zed"
+  | "intelliJ"
+  | "rider"
+  | "webStorm"
+  | "pyCharm"
+  | "unity"
+  | "appWindow"
+  | "terminal"
+  | "code";
+
+export interface LauncherProfile {
+  id: string;
+  name: string;
+  program: string;
+  arguments: string[];
+  wslArguments?: string[] | null;
+  detectionMode: LauncherDetectionMode;
+  icon: LauncherIcon;
+  accent?: string | null;
+  builtIn: boolean;
+}
+
+export interface LauncherProfileStatus {
+  profile: LauncherProfile;
+  available: boolean;
+  resolvedProgram?: string | null;
+  unavailableReason?: string | null;
+}
+
+export interface LauncherOpenRequest {
+  profileId?: string | null;
+  path: WorkspacePath;
+}
+
+export interface LauncherLaunchResult {
+  profileId: string;
+  program: string;
+  arguments: string[];
+}
+
+export interface LauncherValidationResult {
+  valid: boolean;
+  errors: string[];
+  resolvedProgram?: string | null;
+}
 
 export interface AppSettings {
   theme: ThemePreference;
@@ -12,6 +63,8 @@ export interface AppSettings {
   confirmBeforeClose: boolean;
   sidebarWidth: number;
   lastActiveWorkspaceId?: string | null;
+  defaultLauncherProfileId?: string | null;
+  launcherProfiles: LauncherProfile[];
 }
 
 export interface WorkspacePath {
@@ -46,6 +99,7 @@ export interface TerminalDefinition {
   startupCommand?: string | null;
   environmentVariables: EnvironmentVariable[];
   autoStart: boolean;
+  launcherProfileId?: string | null;
 }
 
 export interface PaneNode {
@@ -102,6 +156,7 @@ export interface BootstrapPayload {
   settings: AppSettings;
   windowsShells: ShellProfile[];
   wslDistributions: WslDistribution[];
+  launcherProfiles: LauncherProfileStatus[];
 }
 
 export interface TerminalStartRequest {

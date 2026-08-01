@@ -1,5 +1,6 @@
 mod commands;
 mod error;
+mod launcher;
 mod models;
 mod platform;
 mod storage;
@@ -44,6 +45,9 @@ pub fn run() {
             commands::workspace_open,
             commands::workspace_delete,
             commands::settings_update,
+            commands::launcher_validate_profile,
+            commands::launcher_list_profiles,
+            commands::launcher_open,
             commands::platform_detect_windows_shells,
             commands::platform_list_wsl_distributions,
             commands::platform_detect_wsl_shells,

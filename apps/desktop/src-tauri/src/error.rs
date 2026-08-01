@@ -25,6 +25,10 @@ pub enum TurtorgeError {
     Validation(String),
     #[error("Platform operation failed: {0}")]
     Platform(String),
+    #[error("Launcher is unavailable: {0}")]
+    LauncherUnavailable(String),
+    #[error("Unable to open launcher: {0}")]
+    LauncherFailed(String),
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -50,6 +54,8 @@ impl From<TurtorgeError> for ApiError {
             TurtorgeError::StorageWriteFailed(_) => "STORAGE_WRITE_FAILED",
             TurtorgeError::Validation(_) => "VALIDATION_ERROR",
             TurtorgeError::Platform(_) => "PLATFORM_ERROR",
+            TurtorgeError::LauncherUnavailable(_) => "LAUNCHER_UNAVAILABLE",
+            TurtorgeError::LauncherFailed(_) => "LAUNCHER_FAILED",
             TurtorgeError::Internal(_) => "INTERNAL_ERROR",
         };
 

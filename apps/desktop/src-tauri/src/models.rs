@@ -17,6 +17,10 @@ pub struct AppSettings {
     pub confirm_before_close: bool,
     pub sidebar_width: u16,
     pub last_active_workspace_id: Option<String>,
+    #[serde(default)]
+    pub default_launcher_profile_id: Option<String>,
+    #[serde(default)]
+    pub launcher_profiles: Vec<LauncherProfile>,
 }
 
 impl Default for AppSettings {
@@ -27,8 +31,82 @@ impl Default for AppSettings {
             confirm_before_close: true,
             sidebar_width: 236,
             last_active_workspace_id: None,
+            default_launcher_profile_id: None,
+            launcher_profiles: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum LauncherDetectionMode {
+    Auto,
+    Manual,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum LauncherIcon {
+    Explorer,
+    VsCode,
+    Cursor,
+    Antigravity,
+    Zed,
+    IntelliJ,
+    Rider,
+    WebStorm,
+    PyCharm,
+    Unity,
+    AppWindow,
+    Terminal,
+    Code,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LauncherProfile {
+    pub id: String,
+    pub name: String,
+    pub program: String,
+    pub arguments: Vec<String>,
+    pub wsl_arguments: Option<Vec<String>>,
+    pub detection_mode: LauncherDetectionMode,
+    pub icon: LauncherIcon,
+    pub accent: Option<String>,
+    #[serde(default)]
+    pub built_in: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LauncherProfileStatus {
+    pub profile: LauncherProfile,
+    pub available: bool,
+    pub resolved_program: Option<String>,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LauncherOpenRequest {
+    pub profile_id: Option<String>,
+    pub path: WorkspacePath,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LauncherLaunchResult {
+    pub profile_id: String,
+    pub program: String,
+    pub arguments: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LauncherValidationResult {
+    pub valid: bool,
+    pub errors: Vec<String>,
+    pub resolved_program: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -94,6 +172,8 @@ pub struct TerminalDefinition {
     pub startup_command: Option<String>,
     pub environment_variables: Vec<EnvironmentVariable>,
     pub auto_start: bool,
+    #[serde(default)]
+    pub launcher_profile_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -168,6 +248,7 @@ pub struct BootstrapPayload {
     pub settings: AppSettings,
     pub windows_shells: Vec<ShellProfile>,
     pub wsl_distributions: Vec<WslDistribution>,
+    pub launcher_profiles: Vec<LauncherProfileStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,7 +314,7 @@ pub fn merge_environment(
 
 #[cfg(test)]
 mod tests {
-    use super::{LayoutNode, TerminalEvent};
+    use super::{AppSettings, LayoutNode, TerminalDefinition, TerminalEvent};
 
     #[test]
     fn layout_node_accepts_camel_case_pane_fields() {
@@ -284,5 +365,47 @@ mod tests {
                 "data": [27, 91, 54, 110]
             })
         );
+    }
+
+    #[test]
+    fn settings_without_launcher_fields_remain_compatible() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "theme": "system",
+            "openLastWorkspace": true,
+            "confirmBeforeClose": true,
+            "sidebarWidth": 236,
+            "lastActiveWorkspaceId": null
+        }))
+        .expect("legacy settings should load");
+
+        assert!(settings.default_launcher_profile_id.is_none());
+        assert!(settings.launcher_profiles.is_empty());
+    }
+
+    #[test]
+    fn terminal_without_launcher_override_remains_compatible() {
+        let terminal: TerminalDefinition = serde_json::from_value(serde_json::json!({
+            "id": "terminal-1",
+            "name": "Shell",
+            "profile": "shell",
+            "shellProfile": {
+                "id": "pwsh",
+                "name": "PowerShell",
+                "kind": "powerShell",
+                "executable": "pwsh.exe",
+                "version": null,
+                "distribution": null,
+                "shell": null,
+                "loginShell": false,
+                "available": true
+            },
+            "workingDirectory": { "kind": "windows", "value": "C:\\\\work", "distribution": null },
+            "startupCommand": null,
+            "environmentVariables": [],
+            "autoStart": true
+        }))
+        .expect("legacy terminal should load");
+
+        assert!(terminal.launcher_profile_id.is_none());
     }
 }

@@ -3,6 +3,7 @@ import * as api from "../lib/api";
 import type {
   ApiError,
   AppSettings,
+  LauncherProfileStatus,
   ShellProfile,
   TerminalRuntimeSnapshot,
   TerminalStatus,
@@ -18,6 +19,7 @@ interface AppStore {
   settings: AppSettings;
   windowsShells: ShellProfile[];
   wslDistributions: WslDistribution[];
+  launcherProfiles: LauncherProfileStatus[];
   runtimes: Record<string, TerminalRuntimeSnapshot>;
   startRequests: Record<string, number>;
   pendingConnections: Record<string, number>;
@@ -46,6 +48,8 @@ const defaultSettings: AppSettings = {
   confirmBeforeClose: true,
   sidebarWidth: 236,
   lastActiveWorkspaceId: null,
+  defaultLauncherProfileId: null,
+  launcherProfiles: [],
 };
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -56,6 +60,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   settings: defaultSettings,
   windowsShells: [],
   wslDistributions: [],
+  launcherProfiles: [],
   runtimes: {},
   startRequests: {},
   pendingConnections: {},
@@ -86,6 +91,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         settings: payload.settings,
         windowsShells: payload.windowsShells,
         wslDistributions: payload.wslDistributions,
+        launcherProfiles: payload.launcherProfiles,
         activeWorkspaceId,
         runtimes: runtimeMap,
       });

@@ -3,6 +3,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AppSettings,
   BootstrapPayload,
+  LauncherLaunchResult,
+  LauncherOpenRequest,
+  LauncherProfile,
+  LauncherValidationResult,
   ShellProfile,
   TerminalEvent,
   TerminalRuntimeSnapshot,
@@ -18,6 +22,18 @@ export const isTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 let mockWorkspaces: Workspace[] = [];
 const mockRuntimes = new Map<string, TerminalRuntimeSnapshot>();
 const mockScrollback = new Map<string, Uint8Array>();
+
+const mockExplorerLauncher: LauncherProfile = {
+  id: "builtin-explorer",
+  name: "File Explorer",
+  program: "explorer.exe",
+  arguments: ["{path}"],
+  wslArguments: null,
+  detectionMode: "auto",
+  icon: "explorer",
+  accent: null,
+  builtIn: true,
+};
 
 const mockPowerShell: ShellProfile = {
   id: "powershell-7.5.2",
@@ -139,10 +155,20 @@ function mockBootstrap(): BootstrapPayload {
       confirmBeforeClose: true,
       sidebarWidth: 236,
       lastActiveWorkspaceId: mockWorkspaces[0]?.id ?? null,
+      defaultLauncherProfileId: null,
+      launcherProfiles: [],
     },
     windowsShells: [mockPowerShell],
     wslDistributions: [
       { name: "Ubuntu-20.04", isDefault: true, isRunning: true, version: 2 },
+    ],
+    launcherProfiles: [
+      {
+        profile: mockExplorerLauncher,
+        available: true,
+        resolvedProgram: "C:\\Windows\\explorer.exe",
+        unavailableReason: null,
+      },
     ],
   };
 }
@@ -175,6 +201,39 @@ export async function deleteWorkspace(id: string): Promise<void> {
 
 export async function updateSettings(settings: AppSettings): Promise<AppSettings> {
   return isTauri() ? invoke("settings_update", { settings }) : settings;
+}
+
+export async function validateLauncherProfile(
+  profile: LauncherProfile,
+): Promise<LauncherValidationResult> {
+  if (isTauri()) return invoke("launcher_validate_profile", { profile });
+  const hasPath = [...profile.arguments, ...(profile.wslArguments ?? [])].some((argument) =>
+    ["{path}", "{wslPath}", "{projectRoot}"].some((placeholder) =>
+      argument.includes(placeholder),
+    ),
+  );
+  return {
+    valid: Boolean(profile.program.trim()) && hasPath,
+    errors: hasPath ? [] : ["Arguments must include a path placeholder."],
+    resolvedProgram: profile.program || null,
+  };
+}
+
+export async function listLauncherProfiles(): Promise<BootstrapPayload["launcherProfiles"]> {
+  if (isTauri()) return invoke("launcher_list_profiles");
+  return mockBootstrap().launcherProfiles;
+}
+
+export async function openLauncher(
+  request: LauncherOpenRequest,
+): Promise<LauncherLaunchResult> {
+  if (isTauri()) return invoke("launcher_open", { request });
+  const profileId = request.profileId ?? "builtin-explorer";
+  return {
+    profileId,
+    program: "explorer.exe",
+    arguments: [request.path.value],
+  };
 }
 
 export async function detectWindowsShells(): Promise<ShellProfile[]> {

@@ -1,10 +1,11 @@
 use crate::AppState;
 use crate::error::ApiError;
 use crate::models::{
-    AppSettings, BootstrapPayload, TerminalEvent, TerminalRuntimeSnapshot, TerminalStartRequest,
-    Workspace, WorkspacePath, WslDistribution, WslShellDetection,
+    AppSettings, BootstrapPayload, LauncherLaunchResult, LauncherOpenRequest, LauncherProfile,
+    LauncherProfileStatus, LauncherValidationResult, TerminalEvent, TerminalRuntimeSnapshot,
+    TerminalStartRequest, Workspace, WorkspacePath, WslDistribution, WslShellDetection,
 };
-use crate::platform;
+use crate::{launcher, platform};
 use chrono::Utc;
 use tauri::State;
 use tauri::ipc::Channel;
@@ -13,12 +14,36 @@ type CommandResult<T> = Result<T, ApiError>;
 
 #[tauri::command]
 pub fn app_bootstrap(state: State<'_, AppState>) -> CommandResult<BootstrapPayload> {
+    let settings = state.repository.settings().map_err(ApiError::from)?;
     Ok(BootstrapPayload {
         workspaces: state.repository.list_workspaces().map_err(ApiError::from)?,
-        settings: state.repository.settings().map_err(ApiError::from)?,
+        launcher_profiles: launcher::launcher_statuses(&settings),
+        settings,
         windows_shells: platform::detect_windows_shells(),
         wsl_distributions: platform::list_wsl_distributions().unwrap_or_default(),
     })
+}
+
+#[tauri::command]
+pub fn launcher_validate_profile(profile: LauncherProfile) -> LauncherValidationResult {
+    launcher::validate_profile(&profile)
+}
+
+#[tauri::command]
+pub fn launcher_list_profiles(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<LauncherProfileStatus>> {
+    let settings = state.repository.settings().map_err(ApiError::from)?;
+    Ok(launcher::launcher_statuses(&settings))
+}
+
+#[tauri::command]
+pub fn launcher_open(
+    state: State<'_, AppState>,
+    request: LauncherOpenRequest,
+) -> CommandResult<LauncherLaunchResult> {
+    let settings = state.repository.settings().map_err(ApiError::from)?;
+    launcher::open(&settings, request).map_err(ApiError::from)
 }
 
 #[tauri::command]
