@@ -338,13 +338,13 @@ fn resolve_profile_program(
     profile: &LauncherProfile,
     context: Option<&PathContext>,
 ) -> Option<PathBuf> {
-    if profile.id == "builtin-unity" {
-        if let Some(context) = context {
-            return context
-                .unity_version
-                .as_deref()
-                .and_then(find_exact_unity_editor);
-        }
+    if profile.id == "builtin-unity"
+        && let Some(context) = context
+    {
+        return context
+            .unity_version
+            .as_deref()
+            .and_then(find_exact_unity_editor);
     }
 
     match profile.detection_mode {

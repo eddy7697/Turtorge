@@ -1,7 +1,7 @@
 # Turtorge Development History
 
 Last updated: 2026-08-01
-Current stage: Workspace terminal navigation and visible overflow scrolling are implemented and verified in an isolated production build; the active standard standalone release was intentionally not replaced
+Current stage: Windows external launcher profiles and the full terminal editor are implemented and verified in an isolated production build; the active standard standalone release was intentionally not replaced
 
 This document preserves the product and engineering context of the first Turtorge implementation cycle so future work can continue without reconstructing decisions from chat history.
 
@@ -53,6 +53,16 @@ The product direction was stress-tested with the user before implementation. The
 - Claude Code and Codex are terminal profiles rather than separate domain models.
 - Environment variables are plaintext in this MVP and the UI warns users accordingly.
 - The initial UI language is English and supports system, light, and dark themes.
+- Post-MVP work may now optimize the actively used product without redefining the completed Windows MVP or its architectural boundaries.
+- Every terminal may inherit the global external-launcher default or override it. The launcher always targets the terminal definition's saved working directory, not the live shell directory or workspace root.
+- The pane launcher button sits immediately left of Edit Terminal. Its first unconfigured use opens setup with File Explorer selected; subsequent uses launch directly. The former disabled workspace-level Open Editor action is removed.
+- Launcher profiles use a structured executable plus argument-token model, never a raw shell command or launcher-specific environment variables. Direct `.exe` and `.com` programs are allowed, `.cmd` and `.bat` use a controlled command invocation, and PowerShell scripts are rejected.
+- Built-in launcher profiles cover File Explorer, Visual Studio Code, Cursor, Antigravity, Zed, IntelliJ IDEA, Rider, WebStorm, PyCharm, and Unity. Unavailable tools remain visible but cannot be activated until their executable is located. Built-ins are read-only and may be cloned for customization.
+- Launcher templates support `{path}`, `{wslPath}`, `{distribution}`, and `{projectRoot}`. WSL-aware launchers may use dedicated WSL arguments; generic Windows launchers receive a `\\wsl.localhost` path. Missing WSL paths remain visible failures.
+- Unity launching is Windows-only, requires both `Assets` and `ProjectSettings`, reads the required editor version from `ProjectVersion.txt`, and stops with an actionable error if that exact installed version cannot be found.
+- Externally launched file managers and editors are detached from Turtorge: they are not treated as terminal processes, counted in running badges, or terminated on application exit.
+- A future macOS implementation should give Finder the same built-in file-manager role that File Explorer has on Windows.
+- Edit Terminal now owns the full terminal definition. Label and launcher changes apply immediately; shell, working directory, startup command, environment, and auto-start changes apply on the next start. A running terminal receives an explicit Restart Now or Later choice when process configuration changes. Tab double-click remains the quick-rename path.
 
 ## 3. Design phase
 
@@ -70,6 +80,8 @@ The layout-management follow-up was also explored in Superdesign. The approved d
 
 The workspace-terminal navigation and overflow follow-up was finalized in Superdesign draft `0180969e-f94e-4e29-ad07-1fd2841d2463`. It preserves the existing Pinned/Recent structure and separates the disclosure chevron, workspace folder, and row-level pin icon.
 
+The external-launcher and full terminal-edit follow-up was explored through the baseline draft `d3a4ace0-5722-4609-a67d-4c352fef56fd` and approved launcher setup, settings, terminal editor, and profile editor drafts `5f2561b1-bee8-4e55-8a90-861086289970`, `6e9311e1-6b5b-4fbd-91b6-d96e019da74e`, `b9cc79bc-6d8a-4d00-b271-a716fd94389f`, and `5eb2e6ef-73ae-4b5e-bc0d-beabf1b03f3a`.
+
 The source logo was not altered. `images/app-icon.png` and the Tauri platform icons were generated as deterministic transparent crops of the supplied artwork.
 
 ## 4. Implementation phase
@@ -83,7 +95,7 @@ The source logo was not altered. `images/app-icon.png` and the Tauri platform ic
 - Fit and web-links addons
 - Application-controlled terminal tabs
 - Native mouse/trackpad tab drag-and-drop with exact insertion markers, pane drop highlighting, horizontal tab scrolling, and same-workspace cross-pane moves
-- Persisted terminal label rename from either the pane action or a tab double-click
+- Full Edit Terminal flow for label, shell/profile, working directory, startup command, environment variables, auto-start, and external-launcher override; tab double-click remains quick rename
 - Nested horizontal and vertical split tree
 - Leaf-pane deletion with final-pane protection, transition blocking, bulk process confirmation, sibling-tree promotion, and visible persistence errors
 - Draggable split ratios
@@ -94,6 +106,8 @@ The source logo was not altered. `images/app-icon.png` and the Tauri platform ic
 - Create Workspace and New Terminal flows
 - Per-terminal working-directory selection and Windows/WSL native folder browsing in New Terminal
 - Settings, light/dark/system theme selection, and responsive dialogs
+- Launcher settings with a global default, availability-aware built-in preset grid, branded marks, clone-to-custom behavior, structured profile editing, reference-safe deletion, and executable selection
+- Dynamic pane launcher action, first-use Save & Open setup, persistent actionable launch errors, and optional launcher selection in Create Workspace and New Terminal
 - Readable in-app bootstrap, WSL shell-detection, directory-validation, and workspace/terminal preparation status
 - Shell, Claude Code, Codex, and custom terminal profiles
 - Environment-variable editor and plaintext warning
@@ -117,6 +131,9 @@ The source logo was not altered. `images/app-icon.png` and the Tauri platform ic
 - Missing saved WSL working-directory fallback to the default user's home with an in-terminal notice
 - Native `zsh -l -i` and `bash -l -i` startup
 - Redacted error model that does not persist terminal content or environment values
+- Serde-default launcher fields that preserve compatibility with existing settings and terminal definitions
+- External-launcher discovery from PATH and trusted stable install locations without executing candidate tools
+- Typed launcher validation and argument expansion, Windows/WSL path translation, Unity project/version resolution, and detached process creation
 
 ### Branding and release assets
 
@@ -242,6 +259,18 @@ Resolution:
 - Queue live terminal events until the attach snapshot has been replayed, then preserve their original order.
 - Avoid reconnecting merely because the stored runtime snapshot object changed.
 
+### External launchers need typed arguments and separate path semantics
+
+File managers, CLI editor shims, native IDE executables, WSL-aware editors, and Unity do not share one safe command-line shape. Treating launcher configuration as a raw command string would introduce quoting ambiguity and shell injection risk, while treating Windows and WSL paths as interchangeable would open the wrong location.
+
+Resolution:
+
+- Store the executable and every argument as separate values and expand only an allowlisted placeholder set.
+- Require at least one path-bearing placeholder and validate file extensions before a profile can become active.
+- Resolve WSL-aware arguments separately from generic Windows UNC paths, without silently falling back to the WSL home directory.
+- Resolve Unity projects and their exact editor version before process creation.
+- Consider only successful detached process creation part of Turtorge's responsibility; external application lifecycle remains outside the terminal registry.
+
 ## 6. Verification history
 
 The completed MVP passed:
@@ -314,6 +343,16 @@ The workspace-terminal navigation and overflow follow-up additionally passed:
 - Browser console remained free of warnings and errors during the overflow, navigation, and focus checks
 - Tauri CLI `--no-bundle` production build succeeded at `target/codex-sidebar-overflow-verification/release/turtorge.exe`
 
+The external-launcher and full terminal-edit follow-up additionally passed:
+
+- Frontend Vitest suite: 34/34 tests, including launcher settings, first-use setup, pane launching, launcher-only edits, and running-terminal restart decisions
+- TypeScript application compilation and Vite production build
+- Rust default suite: 18 passed, 1 real-WSL integration test ignored by default
+- Rust formatting and Clippy with `-D warnings`
+- Browser QA at 1280×720 for the pane action strip, launcher setup, settings preset grid, cloned profile editor, and full Edit Terminal dialog; the console remained free of warnings and errors
+- Tauri CLI `--no-bundle` production build succeeded at `target/codex-launcher-verification/release/turtorge.exe`
+- Native acceptance that opens each available external application remains pending because launching user applications was intentionally not included in automated or browser QA
+
 The production frontend currently emits a non-blocking warning that the main JavaScript chunk is larger than 500 kB. Code splitting is a future optimization, not an MVP blocker.
 
 ## 7. Delivery state
@@ -342,6 +381,16 @@ The 2026-07-31 interaction fixes were initially built under `target/codex-native
 
 The 2026-08-01 workspace-terminal navigation and overflow changes were built under `target/codex-sidebar-overflow-verification/release/turtorge.exe`. The standard `target/release/turtorge.exe` remained active with running terminals and was intentionally not replaced.
 
+The 2026-08-01 external-launcher implementation was delivered in staged commits:
+
+```text
+70a364c feat: add external launcher core
+0db75cc feat: add launcher profile settings
+0aee6e5 feat: integrate launchers into terminal workflows
+```
+
+The final verified executable is `target/codex-launcher-verification/release/turtorge.exe`, SHA-256 `BF77E49FF25DC611F588FC535E82008163B0A85FA8A0BB160D414862EF367402`. The standard release executable was intentionally not replaced.
+
 ## 8. Deferred scope
 
 The following work was deliberately excluded from this MVP:
@@ -350,12 +399,13 @@ The following work was deliberately excluded from this MVP:
 - macOS and Linux native builds
 - `.turtorge.yml` manifest import/export and repository trust flow
 - Tags, groups, and the full workspace management surface
-- Full settings matrix
+- Settings areas beyond the implemented appearance and launcher-profile controls
 - Secure secret storage
 - Diagnostic export archive
 - Git Bash, SSH, container, and remote adapters
 - Bundle code splitting and performance tuning beyond the MVP target
 - Keyboard commands for moving terminal tabs and cross-workspace tab drag-and-drop
+- Command-palette or keyboard-shortcut access to external launchers
 
 These are future phases, not incomplete items from the approved Windows MVP.
 
@@ -364,7 +414,7 @@ These are future phases, not incomplete items from the approved Windows MVP.
 Before beginning the next phase:
 
 1. Read this file and `MVP_IMPLEMENTATION.md`.
-2. Confirm the next scope boundary with the user.
+2. Treat the confirmed external-launcher work as a post-MVP optimization; confirm unrelated scope expansions with the user.
 3. Preserve Rust ownership of PTY/process/storage responsibilities.
 4. Preserve in-app terminal tabs and layouts; do not open external console windows.
 5. Keep terminal content out of persistent logs and storage.
