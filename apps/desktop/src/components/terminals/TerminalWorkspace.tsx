@@ -1,28 +1,113 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { AlertCircle, X } from "lucide-react";
+import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { LayoutNode, PaneNode, SplitDirection, Workspace } from "../../types";
+import { paneCount } from "../../lib/layout";
 import { TerminalPane } from "./TerminalPane";
 
 interface TerminalWorkspaceProps {
   workspace: Workspace;
+  layoutError: string | null;
+  terminalFocusRequest: { terminalId: string; sequence: number } | null;
+  onDismissLayoutError: () => void;
   onSelectTerminal: (paneId: string, terminalId: string) => void;
   onNewTerminal: (paneId: string) => void;
   onSplit: (paneId: string, direction: SplitDirection) => void;
   onRatioChange: (splitId: string, ratio: number) => void;
+  onMoveTerminal: (sourcePaneId: string, targetPaneId: string, terminalId: string, targetIndex: number) => Promise<void>;
+  onDeletePane: (paneId: string) => Promise<void>;
   onRemoveTerminal: (terminalId: string) => Promise<void>;
+  onRenameTerminal: (terminalId: string, name: string) => Promise<void>;
 }
 
 export function TerminalWorkspace(props: TerminalWorkspaceProps) {
-  return <div className="terminal-workspace"><LayoutRenderer node={props.workspace.layout} {...props} /></div>;
+  const [dragging, setDragging] = useState<{ paneId: string; terminalId: string } | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ paneId: string; index: number } | null>(null);
+  useEffect(() => {
+    setDragging(null);
+    setDropTarget(null);
+  }, [props.workspace.id]);
+
+  const startDrag = (paneId: string, terminalId: string, event: ReactDragEvent<HTMLButtonElement>) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", terminalId);
+    setDragging({ paneId, terminalId });
+    setDropTarget(null);
+  };
+  const endDrag = () => {
+    setDragging(null);
+    setDropTarget(null);
+  };
+  const moveDropTarget = (paneId: string, index: number) => {
+    if (dragging) setDropTarget({ paneId, index });
+  };
+  const finishDrop = (paneId: string, index: number) => {
+    if (!dragging) return;
+    const source = dragging;
+    endDrag();
+    void props.onMoveTerminal(source.paneId, paneId, source.terminalId, index).catch(() => undefined);
+  };
+
+  return (
+    <div className="terminal-workspace">
+      {props.layoutError && (
+        <div className="layout-error-banner" role="alert">
+          <AlertCircle size={15} />
+          <span>{props.layoutError}</span>
+          <button onClick={props.onDismissLayoutError} aria-label="Dismiss layout error" title="Dismiss"><X size={13} /></button>
+        </div>
+      )}
+      <LayoutRenderer
+        node={props.workspace.layout}
+        {...props}
+        paneTotal={paneCount(props.workspace.layout)}
+        dragging={dragging}
+        dropTarget={dropTarget}
+        onTabDragStart={startDrag}
+        onTabDragEnd={endDrag}
+        onTabDragOver={moveDropTarget}
+        onTabDrop={finishDrop}
+      />
+    </div>
+  );
 }
 
-function LayoutRenderer({ node, ...props }: { node: LayoutNode } & TerminalWorkspaceProps) {
+interface DragProps {
+  paneTotal: number;
+  dragging: { paneId: string; terminalId: string } | null;
+  dropTarget: { paneId: string; index: number } | null;
+  onTabDragStart: (paneId: string, terminalId: string, event: ReactDragEvent<HTMLButtonElement>) => void;
+  onTabDragEnd: () => void;
+  onTabDragOver: (paneId: string, index: number) => void;
+  onTabDrop: (paneId: string, index: number) => void;
+}
+
+function LayoutRenderer({ node, ...props }: { node: LayoutNode } & TerminalWorkspaceProps & DragProps) {
   if (node.type === "pane") {
-    return <TerminalPane pane={node as PaneNode} workspace={props.workspace} onSelectTerminal={props.onSelectTerminal} onNewTerminal={props.onNewTerminal} onSplit={props.onSplit} onRemoveTerminal={props.onRemoveTerminal} />;
+    return (
+      <TerminalPane
+        pane={node as PaneNode}
+        workspace={props.workspace}
+        terminalFocusRequest={props.terminalFocusRequest}
+        canDeletePane={props.paneTotal > 1}
+        dragging={props.dragging}
+        dropTarget={props.dropTarget?.paneId === node.id ? props.dropTarget : null}
+        onSelectTerminal={props.onSelectTerminal}
+        onNewTerminal={props.onNewTerminal}
+        onSplit={props.onSplit}
+        onDeletePane={props.onDeletePane}
+        onRemoveTerminal={props.onRemoveTerminal}
+        onRenameTerminal={props.onRenameTerminal}
+        onTabDragStart={props.onTabDragStart}
+        onTabDragEnd={props.onTabDragEnd}
+        onTabDragOver={props.onTabDragOver}
+        onTabDrop={props.onTabDrop}
+      />
+    );
   }
   return <SplitContainer node={node} {...props} />;
 }
 
-function SplitContainer({ node, ...props }: { node: Extract<LayoutNode, { type: "split" }> } & TerminalWorkspaceProps) {
+function SplitContainer({ node, ...props }: { node: Extract<LayoutNode, { type: "split" }> } & TerminalWorkspaceProps & DragProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [ratio, setRatio] = useState(node.ratio);
   const ratioRef = useRef(node.ratio);

@@ -1,4 +1,4 @@
-.terminal-workspace { flex: 1; min-width: 0; min-height: 0; padding: 6px; overflow: hidden; background: var(--app-bg); }
+.terminal-workspace { position: relative; flex: 1; min-width: 0; min-height: 0; padding: 6px; overflow: hidden; background: var(--app-bg); }
 .split-container { width: 100%; height: 100%; display: flex; min-width: 0; min-height: 0; }
 .split-container.horizontal { flex-direction: row; }
 .split-container.vertical { flex-direction: column; }
@@ -13,23 +13,35 @@
 
 .terminal-pane { width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border-default); border-radius: 4px; background: var(--terminal-bg); }
 .terminal-pane:focus-within { border-color: var(--border-strong); box-shadow: 0 0 0 1px var(--accent-muted); }
-.terminal-tabs { flex: 0 0 34px; min-width: 0; height: 34px; display: flex; align-items: stretch; overflow: hidden; border-bottom: 1px solid var(--border-default); background: var(--surface-secondary); }
-.terminal-tab { position: relative; flex: 0 1 auto; min-width: 90px; max-width: 190px; height: 34px; padding: 0 8px; border: 0; border-right: 1px solid var(--border-default); display: flex; align-items: center; gap: 7px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.terminal-pane.drop-target { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 1px var(--accent-muted); }
+.terminal-tabs { flex: 0 0 34px; width: 100%; min-width: 0; height: 34px; display: flex; align-items: stretch; overflow: hidden; border-bottom: 1px solid var(--border-default); background: var(--surface-secondary); }
+.terminal-tab-strip { position: relative; flex: 1 1 auto; min-width: 0; display: flex; align-items: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-color: var(--border-strong) transparent; scrollbar-width: thin; }
+.terminal-tab-strip::-webkit-scrollbar { height: 4px; }
+.terminal-tab-strip::-webkit-scrollbar-track { background: transparent; }
+.terminal-tab-strip::-webkit-scrollbar-thumb { border-radius: 2px; background: color-mix(in srgb, var(--text-muted) 58%, transparent); }
+.terminal-tab-strip::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--text-secondary) 70%, transparent); }
+.terminal-tab-strip::-webkit-scrollbar-button { display: none; }
+.terminal-tab { position: relative; flex: 0 0 auto; min-width: 90px; max-width: 190px; height: 34px; padding: 0 8px; border: 0; border-right: 1px solid var(--border-default); display: flex; align-items: center; gap: 7px; background: transparent; color: var(--text-secondary); cursor: grab; }
+.terminal-tab:active { cursor: grabbing; }
 .terminal-tab:hover { background: var(--surface-hover); color: var(--text-primary); }
 .terminal-tab.active { color: var(--text-primary); background: var(--terminal-bg); }
 .terminal-tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--accent); }
+.terminal-tab.dragging { opacity: .38; }
 .terminal-tab > span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 580; }
 .runtime-dot { flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
-.runtime-dot.running { background: var(--success); }
-.runtime-dot.starting, .runtime-dot.stopping { background: var(--warning); }
+.runtime-dot.alive, .runtime-dot.running, .runtime-dot.starting, .runtime-dot.stopping { background: var(--success); }
 .runtime-dot.failed { background: var(--danger); }
 .tab-shell { margin-left: auto; color: var(--text-muted); font-size: 9px; text-transform: uppercase; }
 .tab-close { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; border-radius: 3px; opacity: 0; }
 .terminal-tab:hover .tab-close, .terminal-tab:focus-visible .tab-close, .terminal-tab.active .tab-close { opacity: .68; }
 .tab-close:hover { color: var(--danger); background: var(--danger-muted); opacity: 1 !important; }
-.tab-action, .pane-actions button { flex: 0 0 28px; width: 28px; border: 0; background: transparent; color: var(--text-muted); display: flex; align-items: center; justify-content: center; cursor: pointer; }
-.tab-action:hover, .pane-actions button:hover { color: var(--text-primary); background: var(--surface-hover); }
-.pane-actions { margin-left: auto; display: flex; }
+.pane-actions { flex: 0 0 auto; margin-left: auto; display: flex; align-items: stretch; border-left: 1px solid var(--border-default); background: var(--surface-secondary); z-index: 2; }
+.pane-actions button { flex: 0 0 28px; width: 28px; border: 0; background: transparent; color: var(--text-muted); display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.pane-actions button:hover:not(:disabled) { color: var(--text-primary); background: var(--surface-hover); }
+.pane-actions .delete-pane-action:hover:not(:disabled) { color: var(--danger); background: var(--danger-muted); }
+.pane-action-divider { align-self: center; flex: 0 0 1px; width: 1px; height: 16px; margin: 0 2px; background: var(--border-default); }
+.tab-insertion-marker { position: relative; flex: 0 0 0; width: 0; z-index: 5; }
+.tab-insertion-marker::after { content: ""; position: absolute; top: 5px; bottom: 5px; left: -1px; width: 2px; border-radius: 1px; background: var(--accent); box-shadow: 0 0 7px color-mix(in srgb, var(--accent) 64%, transparent); }
 .terminal-surface { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--terminal-bg); }
 .xterm-host { position: absolute; inset: 0; padding: 8px 9px 6px; }
 .xterm-host .xterm { height: 100%; }
@@ -44,8 +56,22 @@
 .terminal-exit-banner { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 3; min-height: 32px; padding: 5px 8px 5px 10px; border: 1px solid var(--border-default); border-radius: 4px; display: flex; align-items: center; justify-content: space-between; color: var(--text-secondary); background: var(--surface-primary); box-shadow: 0 5px 18px rgba(0,0,0,.24); font-size: 11px; }
 .terminal-exit-banner button { height: 22px; border: 0; border-radius: 3px; display: flex; align-items: center; gap: 5px; color: var(--accent); background: transparent; cursor: pointer; }
 .terminal-exit-banner button:hover { background: var(--accent-muted); }
+.rename-error { margin-top: 10px; }
+.layout-error-banner { position: absolute; z-index: 20; top: 12px; right: 12px; max-width: min(460px, calc(100% - 24px)); min-height: 34px; padding: 7px 7px 7px 10px; border: 1px solid color-mix(in srgb, var(--danger) 38%, transparent); border-radius: 5px; display: flex; align-items: center; gap: 8px; color: var(--danger); background: var(--surface-primary); box-shadow: 0 8px 24px rgba(0,0,0,.28); }
+.layout-error-banner span { flex: 1; color: var(--text-secondary); font-size: 11px; line-height: 1.4; }
+.layout-error-banner button { width: 24px; height: 24px; border: 0; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: var(--text-muted); background: transparent; cursor: pointer; }
+.layout-error-banner button:hover { color: var(--text-primary); background: var(--surface-hover); }
+.pane-delete-summary { padding: 10px; border: 1px solid color-mix(in srgb, var(--danger) 34%, transparent); border-radius: 5px; display: flex; align-items: flex-start; gap: 9px; color: var(--danger); background: var(--danger-muted); }
+.pane-delete-summary span { display: grid; gap: 3px; }
+.pane-delete-summary strong { color: var(--text-primary); font-size: 11px; }
+.pane-delete-summary small { color: var(--text-secondary); font-size: 10px; }
+.pane-delete-list { margin-top: 10px; display: grid; gap: 2px; }
+.pane-delete-list > div { min-height: 28px; padding: 0 8px; border: 1px solid var(--border-default); border-radius: 4px; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--surface-secondary); }
+.pane-delete-list span { min-width: 0; display: flex; align-items: center; gap: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.pane-delete-list small { color: var(--text-muted); font-size: 9px; font-weight: 650; letter-spacing: .02em; text-transform: uppercase; }
+.pane-delete-wait, .pane-delete-list + .form-error, .pane-delete-wait + .form-error { margin-top: 10px; }
 
 @media (max-width: 1050px) {
-  .tab-shell, .pane-actions button:last-child { display: none; }
+  .tab-shell { display: none; }
   .terminal-tab { min-width: 74px; }
 }

@@ -206,14 +206,32 @@ export async function chooseWindowsDirectory(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+export async function chooseWslDirectory(distribution: string): Promise<WorkspacePath | null> {
+  if (!isTauri()) {
+    return { kind: "wsl", value: "~/projects/Turtorge", distribution };
+  }
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    defaultPath: `\\\\wsl.localhost\\${distribution}\\`,
+  });
+  if (typeof selected !== "string") return null;
+  const value = await invoke<string>("platform_resolve_wsl_path", {
+    path: { kind: "windows", value: selected, distribution: null } satisfies WorkspacePath,
+    distribution,
+  });
+  return { kind: "wsl", value, distribution };
+}
+
 export async function startTerminal(
   request: TerminalStartRequest,
+  connectionId: string,
   onEvent: (event: TerminalEvent) => void,
 ): Promise<TerminalRuntimeSnapshot> {
   if (isTauri()) {
     const channel = new Channel<TerminalEvent>();
     channel.onmessage = onEvent;
-    return invoke("terminal_start", { request, onEvent: channel });
+    return invoke("terminal_start", { request, connectionId, onEvent: channel });
   }
   const runtime: TerminalRuntimeSnapshot = {
     id: `runtime-${request.definition.id}`,
@@ -240,12 +258,13 @@ export async function startTerminal(
 
 export async function attachTerminal(
   runtimeId: string,
+  connectionId: string,
   onEvent: (event: TerminalEvent) => void,
 ): Promise<TerminalRuntimeSnapshot> {
   if (isTauri()) {
     const channel = new Channel<TerminalEvent>();
     channel.onmessage = onEvent;
-    return invoke("terminal_attach", { runtimeId, onEvent: channel });
+    return invoke("terminal_attach", { runtimeId, connectionId, onEvent: channel });
   }
   const runtime = mockRuntimes.get(runtimeId);
   if (!runtime) throw new Error("Terminal not found");
@@ -254,8 +273,8 @@ export async function attachTerminal(
   return runtime;
 }
 
-export async function detachTerminal(runtimeId: string): Promise<void> {
-  if (isTauri()) await invoke("terminal_detach", { runtimeId });
+export async function detachTerminal(runtimeId: string, connectionId: string): Promise<void> {
+  if (isTauri()) await invoke("terminal_detach", { runtimeId, connectionId });
 }
 
 export async function writeTerminal(runtimeId: string, data: Uint8Array): Promise<void> {

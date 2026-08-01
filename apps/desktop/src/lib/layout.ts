@@ -80,13 +80,14 @@ export function removeTerminalFromLayout(
   terminalId: string,
 ): LayoutNode {
   if (node.type === "pane") {
+    const removedIndex = node.terminalIds.indexOf(terminalId);
     const terminalIds = node.terminalIds.filter((id) => id !== terminalId);
     return {
       ...node,
       terminalIds,
       activeTerminalId:
         node.activeTerminalId === terminalId
-          ? terminalIds[0] ?? null
+          ? terminalIds[Math.min(removedIndex, terminalIds.length - 1)] ?? null
           : node.activeTerminalId,
     };
   }
@@ -95,6 +96,66 @@ export function removeTerminalFromLayout(
     first: removeTerminalFromLayout(node.first, terminalId),
     second: removeTerminalFromLayout(node.second, terminalId),
   };
+}
+
+export function moveTerminal(
+  node: LayoutNode,
+  sourcePaneId: string,
+  targetPaneId: string,
+  terminalId: string,
+  targetIndex: number,
+): LayoutNode {
+  const sourcePane = findPane(node, sourcePaneId);
+  const targetPane = findPane(node, targetPaneId);
+  if (!sourcePane?.terminalIds.includes(terminalId) || !targetPane) return node;
+
+  if (sourcePaneId === targetPaneId) {
+    return mapPane(node, sourcePaneId, (pane) => {
+      const terminalIds = pane.terminalIds.filter((id) => id !== terminalId);
+      terminalIds.splice(clampIndex(targetIndex, terminalIds.length), 0, terminalId);
+      return { ...pane, terminalIds };
+    });
+  }
+
+  const sourceIndex = sourcePane.terminalIds.indexOf(terminalId);
+  const withoutSource = mapPane(node, sourcePaneId, (pane) => {
+    const terminalIds = pane.terminalIds.filter((id) => id !== terminalId);
+    return {
+      ...pane,
+      terminalIds,
+      activeTerminalId:
+        pane.activeTerminalId === terminalId
+          ? terminalIds[Math.min(sourceIndex, terminalIds.length - 1)] ?? null
+          : pane.activeTerminalId,
+    };
+  });
+
+  return mapPane(withoutSource, targetPaneId, (pane) => {
+    const terminalIds = pane.terminalIds.filter((id) => id !== terminalId);
+    terminalIds.splice(clampIndex(targetIndex, terminalIds.length), 0, terminalId);
+    return {
+      ...pane,
+      terminalIds,
+      activeTerminalId: terminalId,
+    };
+  });
+}
+
+export function removePaneFromLayout(node: LayoutNode, paneId: string): LayoutNode {
+  if (node.type === "pane") return node;
+  if (node.first.type === "pane" && node.first.id === paneId) return node.second;
+  if (node.second.type === "pane" && node.second.id === paneId) return node.first;
+
+  const first = removePaneFromLayout(node.first, paneId);
+  if (first !== node.first) return { ...node, first };
+  const second = removePaneFromLayout(node.second, paneId);
+  return second === node.second ? node : { ...node, second };
+}
+
+export function paneCount(node: LayoutNode): number {
+  return node.type === "pane"
+    ? 1
+    : paneCount(node.first) + paneCount(node.second);
 }
 
 export function updateSplitRatio(
@@ -117,3 +178,6 @@ export function firstPaneId(node: LayoutNode): string {
   return node.type === "pane" ? node.id : firstPaneId(node.first);
 }
 
+function clampIndex(index: number, length: number): number {
+  return Math.min(Math.max(0, index), length);
+}

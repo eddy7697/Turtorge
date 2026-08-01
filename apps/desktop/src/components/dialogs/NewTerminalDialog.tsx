@@ -1,8 +1,8 @@
-import { LoaderCircle } from "lucide-react";
+import { FolderOpen, LoaderCircle } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { detectWslShells, validatePath } from "../../lib/api";
+import { chooseWindowsDirectory, chooseWslDirectory, detectWslShells, validatePath } from "../../lib/api";
 import { createId } from "../../lib/ids";
-import type { EnvironmentVariable, ShellProfile, TerminalDefinition, TerminalProfileKind, Workspace, WslDistribution } from "../../types";
+import type { EnvironmentVariable, PathKind, ShellProfile, TerminalDefinition, TerminalProfileKind, Workspace, WorkspacePath, WslDistribution } from "../../types";
 import { EnvironmentEditor } from "../ui/EnvironmentEditor";
 import { Modal } from "../ui/Modal";
 
@@ -26,16 +26,20 @@ export function NewTerminalDialog({
   const [shellId, setShellId] = useState(workspace.defaultShellProfile.id);
   const [profile, setProfile] = useState<TerminalProfileKind>("shell");
   const [name, setName] = useState("Terminal");
+  const [workingDirectory, setWorkingDirectory] = useState<WorkspacePath>(() =>
+    initialWorkingDirectory(workspace.rootDirectory, defaultKind === "wsl" ? "wsl" : "windows", distribution),
+  );
   const [command, setCommand] = useState("");
   const [variables, setVariables] = useState<EnvironmentVariable[]>([]);
   const [autoStart, setAutoStart] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loadingShells, setLoadingShells] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (environment !== "wsl" || !distribution) return;
     let cancelled = false;
-    setLoading(true);
+    setLoadingShells(true);
     detectWslShells(distribution)
       .then((result) => {
         if (cancelled) return;
@@ -44,7 +48,7 @@ export function NewTerminalDialog({
         setShellId((matching ?? result.shells[0])?.id ?? "");
       })
       .catch((reason) => !cancelled && setError(String(reason?.message ?? reason)))
-      .finally(() => !cancelled && setLoading(false));
+      .finally(() => !cancelled && setLoadingShells(false));
     return () => { cancelled = true; };
   }, [distribution, environment, workspace.defaultShellProfile.id]);
 
@@ -61,6 +65,47 @@ export function NewTerminalDialog({
 
   useEffect(() => setName(suggestedName), [suggestedName]);
 
+  const changeEnvironment = (next: "windows" | "wsl") => {
+    setEnvironment(next);
+    if (next === "windows") {
+      setShellId(windowsShells[0]?.id ?? "");
+      setWorkingDirectory({ ...workspace.rootDirectory });
+      return;
+    }
+    setWorkingDirectory(initialWorkingDirectory(workspace.rootDirectory, "wsl", distribution));
+  };
+
+  const changeDistribution = (next: string) => {
+    setDistribution(next);
+    setWorkingDirectory((current) => current.kind === "wsl"
+      ? { kind: "wsl", value: current.distribution === next ? current.value : "~", distribution: next }
+      : current);
+  };
+
+  const changeWorkingDirectory = (value: string) => {
+    const kind = environment === "windows" ? "windows" : inferPathKind(value, workingDirectory.kind);
+    setWorkingDirectory({
+      kind,
+      value,
+      distribution: kind === "wsl" ? distribution : null,
+    });
+  };
+
+  const browseWorkingDirectory = async () => {
+    setError("");
+    try {
+      if (environment === "wsl") {
+        const selected = await chooseWslDirectory(distribution);
+        if (selected) setWorkingDirectory(selected);
+      } else {
+        const selected = await chooseWindowsDirectory();
+        if (selected) setWorkingDirectory({ kind: "windows", value: selected, distribution: null });
+      }
+    } catch (reason) {
+      setError(String((reason as { message?: string })?.message ?? reason));
+    }
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError("");
@@ -68,14 +113,21 @@ export function NewTerminalDialog({
       setError("Select an available shell and enter a terminal name.");
       return;
     }
-    if (selectedShell.kind === "powerShell" && workspace.rootDirectory.kind === "wsl") {
+    const terminalDirectory: WorkspacePath = workingDirectory.kind === "wsl"
+      ? { ...workingDirectory, value: workingDirectory.value.trim(), distribution }
+      : { ...workingDirectory, value: workingDirectory.value.trim(), distribution: null };
+    if (!terminalDirectory.value) {
+      setError("Choose a working directory for this terminal.");
+      return;
+    }
+    if (selectedShell.kind === "powerShell" && terminalDirectory.kind === "wsl") {
       setError("A Windows shell cannot start directly in a WSL-native path. Choose WSL or a Windows-mounted workspace.");
       return;
     }
-    setLoading(true);
+    setSaving(true);
     try {
-      if (!(await validatePath(workspace.rootDirectory))) {
-        setError("The workspace directory is missing. Edit the workspace path before starting a terminal.");
+      if (!(await validatePath(terminalDirectory))) {
+        setError("The selected working directory does not exist. Locate it or edit the path.");
         return;
       }
       await onCreate({
@@ -83,7 +135,7 @@ export function NewTerminalDialog({
         name: name.trim(),
         profile,
         shellProfile: selectedShell,
-        workingDirectory: workspace.rootDirectory,
+        workingDirectory: terminalDirectory,
         startupCommand: profile === "custom" ? command.trim() || null : null,
         environmentVariables: variables.filter((item) => item.key.trim()),
         autoStart,
@@ -92,30 +144,53 @@ export function NewTerminalDialog({
     } catch (reason) {
       setError(String((reason as { message?: string })?.message ?? reason));
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
   return (
-    <Modal title="New Terminal" description="Start now; Auto Start only controls the next workspace restore." onClose={onClose} width="medium" footer={<><button className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit" form="new-terminal-form" disabled={loading}>{loading && <LoaderCircle className="spin" size={14} />} Save and Start</button></>}>
+    <Modal title="New Terminal" description="Start now; Auto Start only controls the next workspace restore." onClose={onClose} width="medium" footer={<><button className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit" form="new-terminal-form" disabled={loadingShells || saving}>{saving && <LoaderCircle className="spin" size={14} />} Save and Start</button></>}>
       <form id="new-terminal-form" className="form-grid" onSubmit={submit}>
         <fieldset className="field full-width segmented-field">
           <legend>Environment</legend>
           <div className="segmented-control">
-            <button type="button" disabled={workspace.rootDirectory.kind === "wsl"} className={environment === "windows" ? "active" : ""} onClick={() => { setEnvironment("windows"); setShellId(windowsShells[0]?.id ?? ""); }}>Windows</button>
-            <button type="button" disabled={wslDistributions.length === 0} className={environment === "wsl" ? "active" : ""} onClick={() => setEnvironment("wsl")}>WSL</button>
+            <button type="button" disabled={workspace.rootDirectory.kind === "wsl"} className={environment === "windows" ? "active" : ""} onClick={() => changeEnvironment("windows")}>Windows</button>
+            <button type="button" disabled={wslDistributions.length === 0} className={environment === "wsl" ? "active" : ""} onClick={() => changeEnvironment("wsl")}>WSL</button>
           </div>
         </fieldset>
-        {environment === "wsl" && <label className="field full-width"><span>Distribution</span><select value={distribution} onChange={(event) => setDistribution(event.target.value)}>{wslDistributions.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label>}
-        <label className="field full-width"><span>Shell</span><select value={shellId} onChange={(event) => setShellId(event.target.value)}>{availableShells.map((shell) => <option key={shell.id} value={shell.id}>{shell.name}</option>)}</select></label>
+        {environment === "wsl" && <label className="field full-width"><span>Distribution</span><select value={distribution} onChange={(event) => changeDistribution(event.target.value)}>{wslDistributions.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label>}
+        <label className="field full-width"><span>Shell</span><select value={shellId} disabled={loadingShells} onChange={(event) => setShellId(event.target.value)}>{loadingShells && <option>Detecting shells…</option>}{!loadingShells && availableShells.length === 0 && <option>No supported shell found</option>}{availableShells.map((shell) => <option key={shell.id} value={shell.id}>{shell.name}</option>)}</select></label>
         <label className="field"><span>Profile</span><select value={profile} onChange={(event) => setProfile(event.target.value as TerminalProfileKind)}><option value="shell">Shell</option><option value="claudeCode">Claude Code</option><option value="codex">Codex</option><option value="custom">Custom command</option></select></label>
         <label className="field"><span>Name</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
+        <div className="field full-width"><label htmlFor="new-terminal-working-directory">Working directory</label><div className="input-with-action"><input id="new-terminal-working-directory" value={workingDirectory.value} placeholder={environment === "wsl" ? "~/projects/app or C:\\Projects\\App" : "C:\\Projects\\App"} onChange={(event) => changeWorkingDirectory(event.target.value)} /><button type="button" className="icon-button" onClick={() => void browseWorkingDirectory()} aria-label={environment === "wsl" ? "Browse WSL folders" : "Browse folders"} title="Browse folders"><FolderOpen size={15} /></button></div>{environment === "wsl" && <small>Saved for this terminal. If the folder disappears later, Turtorge starts it in ~ and shows a notice.</small>}</div>
         {profile === "custom" && <label className="field full-width"><span>Startup command</span><input value={command} placeholder="pnpm dev" onChange={(event) => setCommand(event.target.value)} /></label>}
         <label className="checkbox-field full-width"><input type="checkbox" checked={autoStart} onChange={(event) => setAutoStart(event.target.checked)} /><span><strong>Auto Start</strong><small>Start this terminal when the workspace is restored.</small></span></label>
         <details className="advanced-section full-width"><summary>Terminal environment variables</summary><p>Values are stored as plain text. Do not store secrets.</p><EnvironmentEditor value={variables} onChange={setVariables} /></details>
+        {loadingShells && <div className="form-status full-width" role="status" aria-live="polite"><LoaderCircle className="spin" size={15} /><span><strong>Detecting WSL shells…</strong><small>Starting {distribution} if needed and checking its available login shells.</small></span></div>}
+        {saving && <div className="form-status full-width" role="status" aria-live="polite"><LoaderCircle className="spin" size={15} /><span><strong>Preparing terminal…</strong><small>Validating the working directory and saving this terminal.</small></span></div>}
         {error && <div className="form-error full-width">{error}</div>}
       </form>
     </Modal>
   );
 }
 
+function initialWorkingDirectory(
+  rootDirectory: WorkspacePath,
+  environment: "windows" | "wsl",
+  distribution: string,
+): WorkspacePath {
+  if (environment === "windows" || rootDirectory.kind === "windows") {
+    return { ...rootDirectory };
+  }
+  if (!rootDirectory.distribution || rootDirectory.distribution === distribution) {
+    return { ...rootDirectory, distribution };
+  }
+  return { kind: "wsl", value: "~", distribution };
+}
+
+function inferPathKind(value: string, current: PathKind): PathKind {
+  const trimmed = value.trim();
+  if (trimmed === "~" || trimmed.startsWith("~/") || trimmed.startsWith("/")) return "wsl";
+  if (/^[a-zA-Z]:[\\/]/.test(trimmed) || trimmed.startsWith("\\\\")) return "windows";
+  return current;
+}

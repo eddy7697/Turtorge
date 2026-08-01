@@ -20,6 +20,7 @@ interface AppStore {
   wslDistributions: WslDistribution[];
   runtimes: Record<string, TerminalRuntimeSnapshot>;
   startRequests: Record<string, number>;
+  pendingConnections: Record<string, number>;
   errors: Record<string, string>;
   sidebarCollapsed: boolean;
   suppressTerminalCloseConfirm: boolean;
@@ -33,6 +34,8 @@ interface AppStore {
   setTerminalError: (definitionId: string, message: string) => void;
   removeRuntime: (definitionId: string) => void;
   requestTerminalStart: (definitionId: string) => void;
+  beginTerminalConnection: (definitionId: string) => void;
+  endTerminalConnection: (definitionId: string) => void;
   suppressCloseConfirmForSession: () => void;
   toggleSidebar: () => void;
 }
@@ -55,6 +58,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   wslDistributions: [],
   runtimes: {},
   startRequests: {},
+  pendingConnections: {},
   errors: {},
   sidebarCollapsed: false,
   suppressTerminalCloseConfirm: false,
@@ -179,6 +183,23 @@ export const useAppStore = create<AppStore>((set, get) => ({
         [definitionId]: (state.startRequests[definitionId] ?? 0) + 1,
       },
     })),
+
+  beginTerminalConnection: (definitionId) =>
+    set((state) => ({
+      pendingConnections: {
+        ...state.pendingConnections,
+        [definitionId]: (state.pendingConnections[definitionId] ?? 0) + 1,
+      },
+    })),
+
+  endTerminalConnection: (definitionId) =>
+    set((state) => {
+      const pendingConnections = { ...state.pendingConnections };
+      const remaining = (pendingConnections[definitionId] ?? 1) - 1;
+      if (remaining > 0) pendingConnections[definitionId] = remaining;
+      else delete pendingConnections[definitionId];
+      return { pendingConnections };
+    }),
 
   suppressCloseConfirmForSession: () => set({ suppressTerminalCloseConfirm: true }),
 

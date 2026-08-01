@@ -6,6 +6,7 @@ import { useResolvedTheme } from "../../app/ThemeProvider";
 import { attachTerminal, detachTerminal, resizeTerminal, startTerminal, writeTerminal, writeTerminalDefinition } from "../../lib/api";
 import { useAppStore } from "../../stores/appStore";
 import type { TerminalDefinition, TerminalEvent, Workspace } from "../../types";
+import { terminalKeySequence } from "./terminalKeymap";
 
 const terminalThemes = {
   dark: {
@@ -40,24 +41,25 @@ const terminalThemes = {
   },
 } as const;
 
-export function XtermView({ workspace, definition, activate, connectionGeneration }: { workspace: Workspace; definition: TerminalDefinition; activate: boolean; connectionGeneration: number }) {
+export function XtermView({ workspace, definition, activate, connectionGeneration, focusRequest }: { workspace: Workspace; definition: TerminalDefinition; activate: boolean; connectionGeneration: number; focusRequest?: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const resizeTimer = useRef<number | null>(null);
-  const startingRef = useRef(false);
   const runtimeIdRef = useRef<string | null>(null);
   const pendingInputRef = useRef<Uint8Array[]>([]);
   const [ready, setReady] = useState(false);
   const theme = useResolvedTheme();
-  const runtime = useAppStore((state) => state.runtimes[definition.id]);
   const setRuntime = useAppStore((state) => state.setRuntime);
   const setRuntimeStatus = useAppStore((state) => state.setRuntimeStatus);
   const setTerminalError = useAppStore((state) => state.setTerminalError);
+  const beginTerminalConnection = useAppStore((state) => state.beginTerminalConnection);
+  const endTerminalConnection = useAppStore((state) => state.endTerminalConnection);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    setReady(false);
     const terminal = new Terminal({
       allowProposedApi: false,
       cursorBlink: true,
@@ -75,14 +77,12 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
     terminal.open(container);
     terminalRef.current = terminal;
     fitRef.current = fit;
-    requestAnimationFrame(() => {
+    const initialFitFrame = requestAnimationFrame(() => {
       fit.fit();
       setReady(true);
     });
 
-    const inputDisposable = terminal.onData((data) => {
-      const lineCount = data.split(/\r\n|\r|\n/).length;
-      if (lineCount > 1 && !window.confirm(`Paste ${lineCount} lines into ${definition.name}?\n\nReview multi-line commands before executing them.`)) return;
+    const sendInput = (data: string) => {
       const current = useAppStore.getState().runtimes[definition.id];
       const bytes = new TextEncoder().encode(data);
       const runtimeId = current?.id ?? runtimeIdRef.current;
@@ -94,6 +94,18 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
           else pendingInputRef.current.push(bytes);
         });
       }
+    };
+    terminal.attachCustomKeyEventHandler((event) => {
+      const sequence = terminalKeySequence(event);
+      if (!sequence) return true;
+      event.preventDefault();
+      sendInput(sequence);
+      return false;
+    });
+    const inputDisposable = terminal.onData((data) => {
+      const lineCount = data.split(/\r\n|\r|\n/).length;
+      if (lineCount > 1 && !window.confirm(`Paste ${lineCount} lines into ${definition.name}?\n\nReview multi-line commands before executing them.`)) return;
+      sendInput(data);
     });
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
       const current = useAppStore.getState().runtimes[definition.id];
@@ -109,6 +121,7 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
 
     return () => {
       observer.disconnect();
+      cancelAnimationFrame(initialFitFrame);
       inputDisposable.dispose();
       resizeDisposable.dispose();
       terminal.dispose();
@@ -125,11 +138,20 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
   }, [theme]);
 
   useEffect(() => {
-    if (!ready || !activate || startingRef.current) return;
+    if (focusRequest === undefined) return;
+    const frame = requestAnimationFrame(() => terminalRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [focusRequest]);
+
+  useEffect(() => {
+    if (!ready || !activate) return;
     let disposed = false;
-    let attachedRuntimeId = runtime?.id;
-    runtimeIdRef.current = runtime?.id ?? null;
-    const onEvent = (event: TerminalEvent) => {
+    let connectionReady = false;
+    let attachedRuntimeId = useAppStore.getState().runtimes[definition.id]?.id;
+    const connectionId = `${workspace.id}:${definition.id}:${connectionGeneration}:${crypto.randomUUID()}`;
+    const pendingEvents: TerminalEvent[] = [];
+    runtimeIdRef.current = attachedRuntimeId ?? null;
+    const renderEvent = (event: TerminalEvent) => {
       if (disposed) return;
       if (event.event === "output" || event.event === "snapshot") {
         terminalRef.current?.write(new Uint8Array(event.data));
@@ -142,10 +164,15 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
         setTerminalError(definition.id, event.data.message);
       }
     };
+    const onEvent = (event: TerminalEvent) => {
+      if (disposed) return;
+      if (connectionReady) renderEvent(event);
+      else pendingEvents.push(event);
+    };
 
-    startingRef.current = true;
-    const connect = runtime
-      ? attachTerminal(runtime.id, onEvent)
+    beginTerminalConnection(definition.id);
+    const connect = attachedRuntimeId
+      ? attachTerminal(attachedRuntimeId, connectionId, onEvent)
       : startTerminal(
           {
             workspaceId: workspace.id,
@@ -154,16 +181,23 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
             cols: terminalRef.current?.cols ?? 80,
             rows: terminalRef.current?.rows ?? 24,
           },
+          connectionId,
           onEvent,
         );
     void connect
       .then((snapshot) => {
-        if (disposed) return;
+        if (disposed) {
+          void detachTerminal(snapshot.id, connectionId);
+          return;
+        }
         attachedRuntimeId = snapshot.id;
         runtimeIdRef.current = snapshot.id;
-        if (runtime && snapshot.scrollback.length > 0) {
+        fitRef.current?.fit();
+        if (snapshot.scrollback.length > 0) {
           terminalRef.current?.write(new Uint8Array(snapshot.scrollback));
         }
+        connectionReady = true;
+        for (const event of pendingEvents.splice(0)) renderEvent(event);
         setRuntime(snapshot);
         const pendingInput = pendingInputRef.current.splice(0);
         for (const bytes of pendingInput) void writeTerminal(snapshot.id, bytes);
@@ -172,14 +206,17 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
       })
       .catch((error) => !disposed && setTerminalError(definition.id, String(error?.message ?? error)))
       .finally(() => {
-        startingRef.current = false;
+        endTerminalConnection(definition.id);
       });
 
     return () => {
       disposed = true;
-      if (attachedRuntimeId) void detachTerminal(attachedRuntimeId);
+      if (attachedRuntimeId) void detachTerminal(attachedRuntimeId, connectionId);
     };
-  }, [activate, connectionGeneration, definition, ready, setRuntime, setRuntimeStatus, setTerminalError, workspace.environmentVariables, workspace.id]);
+    // Running terminal definitions and environment settings intentionally do not reconnect in place.
+    // They take effect the next time the terminal is explicitly restarted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activate, beginTerminalConnection, connectionGeneration, definition.id, endTerminalConnection, ready, setRuntime, setRuntimeStatus, setTerminalError, workspace.id]);
 
   return <div className="xterm-host" ref={containerRef} aria-label={`${definition.name} terminal`} />;
 }

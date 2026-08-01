@@ -229,6 +229,8 @@ export function CreateWorkspaceDialog({
           <p>Values are stored as plain text. Do not store secrets.</p>
           <EnvironmentEditor value={environmentVariables} onChange={setEnvironmentVariables} />
         </details>
+        {loadingShells && <div className="form-status full-width" role="status" aria-live="polite"><LoaderCircle className="spin" size={15} /><span><strong>Detecting WSL shells…</strong><small>Starting {distribution} if needed and checking its login shell, zsh, and bash.</small></span></div>}
+        {saving && <div className="form-status full-width" role="status" aria-live="polite"><LoaderCircle className="spin" size={15} /><span><strong>Preparing workspace…</strong><small>Validating the selected directory and saving the terminal definition.</small></span></div>}
         {error && <div className="form-error full-width">{error}</div>}
       </form>
     </Modal>

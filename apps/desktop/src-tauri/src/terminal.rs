@@ -3,7 +3,7 @@ use crate::models::{
     PathKind, ShellKind, TerminalEvent, TerminalProfileKind, TerminalRuntimeSnapshot,
     TerminalStartRequest, TerminalStatus, merge_environment,
 };
-use crate::platform::resolve_wsl_working_directory;
+use crate::platform::{background_command_status, resolve_wsl_working_directory_with_fallback};
 use parking_lot::Mutex;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::collections::{HashMap, VecDeque};
@@ -18,14 +18,22 @@ const MAX_MEMORY_SCROLLBACK_BYTES: usize = 1024 * 1024;
 
 struct TerminalStream {
     buffer: Mutex<VecDeque<u8>>,
-    subscriber: Mutex<Option<Channel<TerminalEvent>>>,
+    subscriber: Mutex<Option<TerminalSubscriber>>,
+}
+
+struct TerminalSubscriber {
+    connection_id: String,
+    channel: Channel<TerminalEvent>,
 }
 
 impl TerminalStream {
-    fn new(subscriber: Channel<TerminalEvent>) -> Self {
+    fn new(connection_id: String, channel: Channel<TerminalEvent>) -> Self {
         Self {
             buffer: Mutex::new(VecDeque::new()),
-            subscriber: Mutex::new(Some(subscriber)),
+            subscriber: Mutex::new(Some(TerminalSubscriber {
+                connection_id,
+                channel,
+            })),
         }
     }
 
@@ -40,19 +48,32 @@ impl TerminalStream {
         self.send(TerminalEvent::Output(bytes.to_vec()));
     }
 
-    fn attach(&self, channel: Channel<TerminalEvent>) -> Vec<u8> {
+    fn attach(&self, connection_id: String, channel: Channel<TerminalEvent>) -> Vec<u8> {
         let mut subscriber = self.subscriber.lock();
         let snapshot = self.buffer.lock().iter().copied().collect::<Vec<_>>();
-        *subscriber = Some(channel);
+        *subscriber = Some(TerminalSubscriber {
+            connection_id,
+            channel,
+        });
         snapshot
     }
 
-    fn detach(&self) {
-        *self.subscriber.lock() = None;
+    fn detach(&self, connection_id: &str) {
+        let mut subscriber = self.subscriber.lock();
+        if subscriber
+            .as_ref()
+            .is_some_and(|subscriber| subscriber.connection_id == connection_id)
+        {
+            *subscriber = None;
+        }
     }
 
     fn send(&self, event: TerminalEvent) {
-        let channel = self.subscriber.lock().clone();
+        let channel = self
+            .subscriber
+            .lock()
+            .as_ref()
+            .map(|subscriber| subscriber.channel.clone());
         if let Some(channel) = channel {
             let _ = channel.send(event);
         }
@@ -103,10 +124,11 @@ impl TerminalManager {
     pub fn start(
         &self,
         request: TerminalStartRequest,
+        connection_id: String,
         channel: Channel<TerminalEvent>,
     ) -> Result<TerminalRuntimeSnapshot, TurtorgeError> {
         if let Some(existing) = self.find_by_definition(&request.definition.id) {
-            let scrollback = existing.stream.attach(channel);
+            let scrollback = existing.stream.attach(connection_id, channel);
             return Ok(existing.snapshot_with_scrollback(scrollback));
         }
         self.terminals.lock().retain(|_, terminal| {
@@ -129,7 +151,10 @@ impl TerminalManager {
             })
             .map_err(|error| TurtorgeError::ProcessSpawnFailed(error.to_string()))?;
 
-        let mut command = build_command(&request)?;
+        let BuiltCommand {
+            mut command,
+            startup_notice,
+        } = build_command(&request)?;
         let environment = merge_environment(
             &request.workspace_environment,
             &request.definition.environment_variables,
@@ -161,7 +186,10 @@ impl TerminalManager {
             .write_all(b"\x1b[1;1R")
             .and_then(|_| writer.flush())
             .map_err(|error| TurtorgeError::ProcessIoFailed(error.to_string()))?;
-        let stream = Arc::new(TerminalStream::new(channel));
+        let stream = Arc::new(TerminalStream::new(connection_id, channel));
+        if let Some(notice) = startup_notice {
+            stream.push(notice.as_bytes());
+        }
         let runtime_id = Uuid::new_v4().to_string();
 
         let managed = Arc::new(ManagedTerminal {
@@ -205,15 +233,16 @@ impl TerminalManager {
     pub fn attach(
         &self,
         runtime_id: &str,
+        connection_id: String,
         channel: Channel<TerminalEvent>,
     ) -> Result<TerminalRuntimeSnapshot, TurtorgeError> {
         let terminal = self.get(runtime_id)?;
-        let scrollback = terminal.stream.attach(channel);
+        let scrollback = terminal.stream.attach(connection_id, channel);
         Ok(terminal.snapshot_with_scrollback(scrollback))
     }
 
-    pub fn detach(&self, runtime_id: &str) -> Result<(), TurtorgeError> {
-        self.get(runtime_id)?.stream.detach();
+    pub fn detach(&self, runtime_id: &str, connection_id: &str) -> Result<(), TurtorgeError> {
+        self.get(runtime_id)?.stream.detach(connection_id);
         Ok(())
     }
 
@@ -330,7 +359,12 @@ impl Drop for TerminalManager {
     }
 }
 
-fn build_command(request: &TerminalStartRequest) -> Result<CommandBuilder, TurtorgeError> {
+struct BuiltCommand {
+    command: CommandBuilder,
+    startup_notice: Option<String>,
+}
+
+fn build_command(request: &TerminalStartRequest) -> Result<BuiltCommand, TurtorgeError> {
     let profile = &request.definition.shell_profile;
     match profile.kind {
         ShellKind::PowerShell => {
@@ -346,7 +380,10 @@ fn build_command(request: &TerminalStartRequest) -> Result<CommandBuilder, Turto
             let mut command = CommandBuilder::new(&profile.executable);
             command.arg("-NoLogo");
             command.cwd(directory);
-            Ok(command)
+            Ok(BuiltCommand {
+                command,
+                startup_notice: None,
+            })
         }
         ShellKind::Wsl => {
             let distribution = profile.distribution.as_deref().ok_or_else(|| {
@@ -355,23 +392,24 @@ fn build_command(request: &TerminalStartRequest) -> Result<CommandBuilder, Turto
             let shell = profile.shell.as_deref().ok_or_else(|| {
                 TurtorgeError::Validation("WSL profile requires a shell".to_owned())
             })?;
-            let shell_available = std::process::Command::new("wsl.exe")
-                .args(["-d", distribution, "--exec", "test", "-x", shell])
-                .status()
-                .map_err(|error| TurtorgeError::Platform(error.to_string()))?;
+            let mut shell_check = std::process::Command::new("wsl.exe");
+            shell_check.args(["-d", distribution, "--exec", "test", "-x", shell]);
+            let shell_available = background_command_status(shell_check)?;
             if !shell_available.success() {
                 return Err(TurtorgeError::ShellUnavailable(format!(
                     "{shell} in WSL distribution {distribution}"
                 )));
             }
-            let directory =
-                resolve_wsl_working_directory(&request.definition.working_directory, distribution)?;
+            let resolved = resolve_wsl_working_directory_with_fallback(
+                &request.definition.working_directory,
+                distribution,
+            )?;
             let environment = merge_environment(
                 &request.workspace_environment,
                 &request.definition.environment_variables,
             );
             let mut command = CommandBuilder::new("wsl.exe");
-            command.args(["-d", distribution, "--cd", &directory, "--exec"]);
+            command.args(["-d", distribution, "--cd", &resolved.path, "--exec"]);
             if environment.is_empty() {
                 command.arg(shell);
             } else {
@@ -385,7 +423,13 @@ fn build_command(request: &TerminalStartRequest) -> Result<CommandBuilder, Turto
                 command.arg("-l");
             }
             command.arg("-i");
-            Ok(command)
+            Ok(BuiltCommand {
+                command,
+                startup_notice: resolved.used_home_fallback.then(|| {
+                    "\r\n[Turtorge] The configured WSL working directory is unavailable; started in ~.\r\n"
+                        .to_owned()
+                }),
+            })
         }
     }
 }
@@ -455,6 +499,43 @@ fn spawn_waiter(
     });
 }
 
+#[cfg(test)]
+mod terminal_stream_tests {
+    use super::*;
+
+    fn test_channel() -> Channel<TerminalEvent> {
+        Channel::new(|_| Ok(()))
+    }
+
+    #[test]
+    fn stale_detach_does_not_clear_a_newer_subscriber() {
+        let stream = TerminalStream::new("old-connection".to_owned(), test_channel());
+        stream.attach("new-connection".to_owned(), test_channel());
+
+        stream.detach("old-connection");
+
+        let subscriber = stream.subscriber.lock();
+        assert_eq!(
+            subscriber
+                .as_ref()
+                .map(|subscriber| subscriber.connection_id.as_str()),
+            Some("new-connection")
+        );
+    }
+
+    #[test]
+    fn current_subscriber_can_detach_and_attach_receives_scrollback() {
+        let stream = TerminalStream::new("connection".to_owned(), test_channel());
+        stream.push(b"terminal snapshot");
+
+        let snapshot = stream.attach("replacement".to_owned(), test_channel());
+        assert_eq!(snapshot, b"terminal snapshot");
+
+        stream.detach("replacement");
+        assert!(stream.subscriber.lock().is_none());
+    }
+}
+
 #[cfg(all(test, windows))]
 mod integration_tests {
     use super::*;
@@ -476,9 +557,11 @@ mod integration_tests {
             .expect("bash or zsh should be detectable in the selected distribution");
         assert!(!detection.shells.is_empty(), "no supported WSL shell found");
 
+        let fallback_shell = detection.shells[0].clone();
         for shell in detection.shells {
             run_wsl_shell_smoke(&distribution.name, shell);
         }
+        run_wsl_missing_directory_fallback(&distribution.name, fallback_shell);
     }
 
     fn run_windows_pty_smoke() {
@@ -550,7 +633,9 @@ mod integration_tests {
                 pixel_height: 0,
             })
             .expect("PTY should open");
-        let smoke_command = build_command(&request).expect("interactive WSL command should build");
+        let smoke_command = build_command(&request)
+            .expect("interactive WSL command should build")
+            .command;
         let mut child = pty
             .slave
             .spawn_command(smoke_command)
@@ -579,6 +664,68 @@ mod integration_tests {
             output.contains("TURTORGE_PTY_OK:"),
             "{} did not return the PTY marker; output was {output:?}",
             shell.name
+        );
+        writer
+            .write_all(b"exit\r")
+            .and_then(|_| writer.flush())
+            .expect("interactive shell exit should be writable");
+        wait_for_success(&mut child, &shell.name);
+    }
+
+    fn run_wsl_missing_directory_fallback(distribution: &str, shell: ShellProfile) {
+        let missing = format!("/tmp/turtorge-missing-{}", Uuid::new_v4());
+        let request = TerminalStartRequest {
+            workspace_id: "wsl-fallback-workspace".to_owned(),
+            definition: TerminalDefinition {
+                id: "wsl-fallback-terminal".to_owned(),
+                name: "WSL fallback".to_owned(),
+                profile: TerminalProfileKind::Shell,
+                shell_profile: shell.clone(),
+                working_directory: WorkspacePath {
+                    kind: PathKind::Wsl,
+                    value: missing,
+                    distribution: Some(distribution.to_owned()),
+                },
+                startup_command: None,
+                environment_variables: Vec::new(),
+                auto_start: false,
+            },
+            workspace_environment: Vec::new(),
+            cols: 80,
+            rows: 24,
+        };
+        let pty = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("PTY should open");
+        let built = build_command(&request).expect("missing WSL directory should use home");
+        assert!(built.startup_notice.is_some());
+        let mut child = pty
+            .slave
+            .spawn_command(built.command)
+            .expect("WSL fallback shell should start");
+        drop(pty.slave);
+
+        let reader = pty.master.try_clone_reader().expect("reader should clone");
+        let mut writer = pty.master.take_writer().expect("writer should open");
+        writer
+            .write_all(b"\x1b[1;1R")
+            .and_then(|_| writer.flush())
+            .expect("bootstrap terminal status should be writable");
+        writer
+            .write_all(b"[ \"$PWD\" = \"$HOME\" ] && printf 'TURTORGE_WSL_HOME_FALLBACK_OK\\n'\r")
+            .and_then(|_| writer.flush())
+            .expect("fallback assertion should be writable");
+        let receiver = spawn_chunk_reader(reader);
+        collect_until(
+            &receiver,
+            "TURTORGE_WSL_HOME_FALLBACK_OK",
+            Duration::from_secs(15),
+            &shell.name,
         );
         writer
             .write_all(b"exit\r")

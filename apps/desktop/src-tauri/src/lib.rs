@@ -48,6 +48,7 @@ pub fn run() {
             commands::platform_list_wsl_distributions,
             commands::platform_detect_wsl_shells,
             commands::platform_validate_path,
+            commands::platform_resolve_wsl_path,
             commands::terminal_start,
             commands::terminal_attach,
             commands::terminal_detach,

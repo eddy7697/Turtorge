@@ -99,14 +99,23 @@ pub fn platform_validate_path(path: WorkspacePath) -> CommandResult<bool> {
 }
 
 #[tauri::command]
+pub fn platform_resolve_wsl_path(
+    path: WorkspacePath,
+    distribution: String,
+) -> CommandResult<String> {
+    platform::resolve_wsl_working_directory(&path, &distribution).map_err(ApiError::from)
+}
+
+#[tauri::command]
 pub fn terminal_start(
     state: State<'_, AppState>,
     request: TerminalStartRequest,
+    connection_id: String,
     on_event: Channel<TerminalEvent>,
 ) -> CommandResult<TerminalRuntimeSnapshot> {
     state
         .terminals
-        .start(request, on_event)
+        .start(request, connection_id, on_event)
         .map_err(ApiError::from)
 }
 
@@ -114,17 +123,25 @@ pub fn terminal_start(
 pub fn terminal_attach(
     state: State<'_, AppState>,
     runtime_id: String,
+    connection_id: String,
     on_event: Channel<TerminalEvent>,
 ) -> CommandResult<TerminalRuntimeSnapshot> {
     state
         .terminals
-        .attach(&runtime_id, on_event)
+        .attach(&runtime_id, connection_id, on_event)
         .map_err(ApiError::from)
 }
 
 #[tauri::command]
-pub fn terminal_detach(state: State<'_, AppState>, runtime_id: String) -> CommandResult<()> {
-    state.terminals.detach(&runtime_id).map_err(ApiError::from)
+pub fn terminal_detach(
+    state: State<'_, AppState>,
+    runtime_id: String,
+    connection_id: String,
+) -> CommandResult<()> {
+    state
+        .terminals
+        .detach(&runtime_id, &connection_id)
+        .map_err(ApiError::from)
 }
 
 #[tauri::command]

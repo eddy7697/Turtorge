@@ -39,7 +39,7 @@ export function TitleBar({
         <kbd>Ctrl P</kbd>
       </button>
 
-      <div className="title-bar-actions">
+      <div className="title-bar-actions" data-tauri-drag-region>
         <button className="icon-button" onClick={onNewTerminal} aria-label="New terminal" title="New terminal (Ctrl+Shift+T)">
           <Plus size={16} />
         </button>
@@ -55,4 +55,3 @@ export function TitleBar({
     </header>
   );
 }
-

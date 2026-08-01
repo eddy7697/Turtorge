@@ -5,12 +5,37 @@ use crate::models::{
 use semver::Version;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, ExitStatus, Output};
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedWslWorkingDirectory {
+    pub path: String,
+    pub used_home_fallback: bool,
+}
 
 fn command_output(mut command: Command) -> Result<Output, TurtorgeError> {
+    configure_background_command(&mut command);
     command
         .output()
         .map_err(|error| TurtorgeError::Platform(error.to_string()))
+}
+
+pub(crate) fn background_command_status(mut command: Command) -> Result<ExitStatus, TurtorgeError> {
+    configure_background_command(&mut command);
+    command
+        .status()
+        .map_err(|error| TurtorgeError::Platform(error.to_string()))
+}
+
+fn configure_background_command(command: &mut Command) {
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
 }
 
 pub fn decode_command_output(bytes: &[u8]) -> String {
@@ -36,15 +61,14 @@ pub fn detect_windows_shells() -> Vec<ShellProfile> {
     let mut shells = powershell_candidates()
         .into_iter()
         .filter_map(|executable| {
-            let output = Command::new(&executable)
-                .args([
-                    "-NoLogo",
-                    "-NoProfile",
-                    "-Command",
-                    "$PSVersionTable.PSVersion.ToString()",
-                ])
-                .output()
-                .ok()?;
+            let mut command = Command::new(&executable);
+            command.args([
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "$PSVersionTable.PSVersion.ToString()",
+            ]);
+            let output = command_output(command).ok()?;
             if !output.status.success() {
                 return None;
             }
@@ -91,7 +115,9 @@ pub fn detect_windows_shells() -> Vec<ShellProfile> {
 fn powershell_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     for executable in ["pwsh.exe", "powershell.exe"] {
-        if let Ok(output) = Command::new("where.exe").arg(executable).output()
+        let mut command = Command::new("where.exe");
+        command.arg(executable);
+        if let Ok(output) = command_output(command)
             && output.status.success()
         {
             candidates.extend(
@@ -281,13 +307,33 @@ pub fn validate_workspace_path(path: &WorkspacePath) -> Result<bool, TurtorgeErr
             })?;
             ensure_known_distribution(distribution)?;
             let expanded = expand_wsl_home_path(&path.value, distribution)?;
-            let status = Command::new("wsl.exe")
-                .args(["-d", distribution, "--exec", "test", "-d", &expanded])
-                .status()
-                .map_err(|error| TurtorgeError::Platform(error.to_string()))?;
-            Ok(status.success())
+            wsl_directory_exists(distribution, &expanded)
         }
     }
+}
+
+pub fn resolve_wsl_working_directory_with_fallback(
+    path: &WorkspacePath,
+    distribution: &str,
+) -> Result<ResolvedWslWorkingDirectory, TurtorgeError> {
+    let configured = resolve_wsl_working_directory(path, distribution)?;
+    if wsl_directory_exists(distribution, &configured)? {
+        return Ok(ResolvedWslWorkingDirectory {
+            path: configured,
+            used_home_fallback: false,
+        });
+    }
+
+    let home = expand_wsl_home_path("~", distribution)?;
+    if !wsl_directory_exists(distribution, &home)? {
+        return Err(TurtorgeError::InvalidWorkingDirectory(
+            "WSL home directory is unavailable".to_owned(),
+        ));
+    }
+    Ok(ResolvedWslWorkingDirectory {
+        path: home,
+        used_home_fallback: true,
+    })
 }
 
 pub fn resolve_wsl_working_directory(
@@ -308,6 +354,9 @@ pub fn resolve_wsl_working_directory(
             expand_wsl_home_path(&path.value, distribution)
         }
         PathKind::Windows => {
+            if let Some(linux_path) = wsl_share_path_to_linux(&path.value, distribution) {
+                return Ok(linux_path);
+            }
             let mut command = Command::new("wsl.exe");
             command.args([
                 "-d",
@@ -325,6 +374,37 @@ pub fn resolve_wsl_working_directory(
             Ok(decode_command_output(&output.stdout).trim().to_owned())
         }
     }
+}
+
+fn wsl_directory_exists(distribution: &str, path: &str) -> Result<bool, TurtorgeError> {
+    let mut command = Command::new("wsl.exe");
+    command.args(["-d", distribution, "--exec", "test", "-d", path]);
+    let status = background_command_status(command)?;
+    Ok(status.success())
+}
+
+fn wsl_share_path_to_linux(path: &str, distribution: &str) -> Option<String> {
+    let mut normalized = path.trim().replace('/', "\\");
+    if let Some(remainder) = normalized.strip_prefix("\\\\?\\UNC\\") {
+        normalized = format!("\\\\{remainder}");
+    }
+
+    for host in ["wsl.localhost", "wsl$"] {
+        let prefix = format!("\\\\{host}\\{distribution}");
+        let Some(candidate_prefix) = normalized.get(..prefix.len()) else {
+            continue;
+        };
+        if !candidate_prefix.eq_ignore_ascii_case(&prefix) {
+            continue;
+        }
+        let remainder = &normalized[prefix.len()..];
+        if remainder.is_empty() {
+            return Some("/".to_owned());
+        }
+        let relative = remainder.strip_prefix('\\')?;
+        return Some(format!("/{}", relative.replace('\\', "/")));
+    }
+    None
 }
 
 fn expand_wsl_home_path(path: &str, distribution: &str) -> Result<String, TurtorgeError> {
@@ -383,5 +463,24 @@ mod tests {
     fn normalizes_short_versions() {
         assert_eq!(normalize_version("7.5"), "7.5.0");
         assert_eq!(normalize_version("5"), "5.0.0");
+    }
+
+    #[test]
+    fn converts_wsl_network_share_paths_to_linux_paths() {
+        assert_eq!(
+            wsl_share_path_to_linux(
+                r"\\wsl.localhost\Ubuntu-24.04\home\vince\projects\app",
+                "Ubuntu-24.04",
+            ),
+            Some("/home/vince/projects/app".to_owned())
+        );
+        assert_eq!(
+            wsl_share_path_to_linux(r"\\wsl$\Ubuntu-24.04", "Ubuntu-24.04"),
+            Some("/".to_owned())
+        );
+        assert_eq!(
+            wsl_share_path_to_linux(r"\\wsl.localhost\Debian\home\vince", "Ubuntu-24.04",),
+            None
+        );
     }
 }
