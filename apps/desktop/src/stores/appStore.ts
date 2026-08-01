@@ -144,6 +144,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
   updateSettings: async (settings) => {
     const saved = await api.updateSettings(settings);
     set({ settings: saved });
+    try {
+      const launcherProfiles = await api.listLauncherProfiles();
+      set({ launcherProfiles });
+    } catch {
+      // The settings were persisted successfully; keep the last detection snapshot until restart.
+    }
   },
 
   setRuntime: (runtime) =>

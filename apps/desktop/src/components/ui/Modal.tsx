@@ -8,7 +8,7 @@ interface ModalProps {
   children: ReactNode;
   footer?: ReactNode;
   onClose: () => void;
-  width?: "small" | "medium" | "large";
+  width?: "small" | "medium" | "large" | "wide";
 }
 
 export function Modal({ title, description, children, footer, onClose, width = "medium" }: ModalProps) {
@@ -39,4 +39,3 @@ export function Modal({ title, description, children, footer, onClose, width = "
     document.body,
   );
 }
-

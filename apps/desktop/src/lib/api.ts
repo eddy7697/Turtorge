@@ -22,6 +22,15 @@ export const isTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 let mockWorkspaces: Workspace[] = [];
 const mockRuntimes = new Map<string, TerminalRuntimeSnapshot>();
 const mockScrollback = new Map<string, Uint8Array>();
+let mockSettings: AppSettings = {
+  theme: "system",
+  openLastWorkspace: true,
+  confirmBeforeClose: true,
+  sidebarWidth: 236,
+  lastActiveWorkspaceId: null,
+  defaultLauncherProfileId: null,
+  launcherProfiles: [],
+};
 
 const mockExplorerLauncher: LauncherProfile = {
   id: "builtin-explorer",
@@ -150,13 +159,8 @@ function mockBootstrap(): BootstrapPayload {
   return {
     workspaces: structuredClone(mockWorkspaces),
     settings: {
-      theme: "system",
-      openLastWorkspace: true,
-      confirmBeforeClose: true,
-      sidebarWidth: 236,
-      lastActiveWorkspaceId: mockWorkspaces[0]?.id ?? null,
-      defaultLauncherProfileId: null,
-      launcherProfiles: [],
+      ...structuredClone(mockSettings),
+      lastActiveWorkspaceId: mockSettings.lastActiveWorkspaceId ?? mockWorkspaces[0]?.id ?? null,
     },
     windowsShells: [mockPowerShell],
     wslDistributions: [
@@ -169,6 +173,12 @@ function mockBootstrap(): BootstrapPayload {
         resolvedProgram: "C:\\Windows\\explorer.exe",
         unavailableReason: null,
       },
+      ...mockSettings.launcherProfiles.map((profile) => ({
+        profile: structuredClone(profile),
+        available: Boolean(profile.program),
+        resolvedProgram: profile.program || null,
+        unavailableReason: profile.program ? null : "Program not configured",
+      })),
     ],
   };
 }
@@ -200,7 +210,9 @@ export async function deleteWorkspace(id: string): Promise<void> {
 }
 
 export async function updateSettings(settings: AppSettings): Promise<AppSettings> {
-  return isTauri() ? invoke("settings_update", { settings }) : settings;
+  if (isTauri()) return invoke("settings_update", { settings });
+  mockSettings = structuredClone(settings);
+  return structuredClone(settings);
 }
 
 export async function validateLauncherProfile(
@@ -222,6 +234,16 @@ export async function validateLauncherProfile(
 export async function listLauncherProfiles(): Promise<BootstrapPayload["launcherProfiles"]> {
   if (isTauri()) return invoke("launcher_list_profiles");
   return mockBootstrap().launcherProfiles;
+}
+
+export async function chooseLauncherProgram(): Promise<string | null> {
+  if (!isTauri()) return "C:\\Program Files\\Editor\\Editor.exe";
+  const selected = await open({
+    directory: false,
+    multiple: false,
+    filters: [{ name: "Launcher programs", extensions: ["exe", "com", "cmd", "bat"] }],
+  });
+  return typeof selected === "string" ? selected : null;
 }
 
 export async function openLauncher(

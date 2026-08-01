@@ -43,6 +43,7 @@ function TurtorgeApp() {
   const settings = useAppStore((state) => state.settings);
   const windowsShells = useAppStore((state) => state.windowsShells);
   const wslDistributions = useAppStore((state) => state.wslDistributions);
+  const launcherProfiles = useAppStore((state) => state.launcherProfiles);
   const runtimes = useAppStore((state) => state.runtimes);
   const errors = useAppStore((state) => state.errors);
   const pendingConnections = useAppStore((state) => state.pendingConnections);
@@ -216,6 +217,23 @@ function TurtorgeApp() {
     const initialTerminal = created.terminals[0];
     if (initialTerminal) requestTerminalStart(initialTerminal.id);
   };
+  const deleteLauncherProfile = async (profileId: string, nextSettings: typeof settings) => {
+    const affected = useAppStore.getState().workspaces.filter((item) =>
+      item.terminals.some((terminal) => terminal.launcherProfileId === profileId),
+    );
+    for (const item of affected) {
+      await saveWorkspace({
+        ...item,
+        terminals: item.terminals.map((terminal) =>
+          terminal.launcherProfileId === profileId
+            ? { ...terminal, launcherProfileId: null }
+            : terminal,
+        ),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    await updateSettings(nextSettings);
+  };
 
   const runningCount = Object.values(runtimes).filter((runtime) => runtime.status === "running" || runtime.status === "starting").length;
   const runningWorkspaceCount = workspaces.filter((item) => item.terminals.some((terminal) => {
@@ -238,7 +256,7 @@ function TurtorgeApp() {
 
       {dialog === "createWorkspace" && <CreateWorkspaceDialog windowsShells={windowsShells} wslDistributions={wslDistributions} onClose={() => setDialog(null)} onCreate={createWorkspace} />}
       {dialog === "newTerminal" && workspace && <NewTerminalDialog workspace={workspace} windowsShells={windowsShells} wslDistributions={wslDistributions} onClose={() => setDialog(null)} onCreate={createTerminal} />}
-      {dialog === "settings" && <SettingsDialog settings={settings} windowsShells={windowsShells} wslDistributions={wslDistributions} onChange={(next) => void updateSettings(next)} onClose={() => setDialog(null)} />}
+      {dialog === "settings" && <SettingsDialog settings={settings} launcherProfiles={launcherProfiles} workspaces={workspaces} windowsShells={windowsShells} wslDistributions={wslDistributions} onChange={updateSettings} onDeleteProfile={deleteLauncherProfile} onClose={() => setDialog(null)} />}
       {dialog === "quickOpen" && <QuickOpenDialog workspaces={workspaces} onSelect={(id) => void selectWorkspace(id)} onClose={() => setDialog(null)} />}
       {dialog === "quit" && <ConfirmQuitDialog workspaceCount={runningWorkspaceCount} terminalCount={runningCount} onCancel={() => setDialog(null)} onConfirm={() => void finishQuit()} />}
     </div>

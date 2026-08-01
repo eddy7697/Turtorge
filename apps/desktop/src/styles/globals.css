@@ -121,6 +121,7 @@ kbd { min-width: 38px; height: 18px; padding: 0 5px; border: 1px solid var(--bor
 .modal-small { width: min(420px, 100%); }
 .modal-medium { width: min(520px, 100%); }
 .modal-large { width: min(640px, 100%); }
+.modal-wide { width: min(780px, 100%); }
 @keyframes modal-in { from { transform: translateY(5px) scale(.992); opacity: 0; } }
 .modal-header { flex: 0 0 auto; padding: 16px 16px 13px 18px; border-bottom: 1px solid var(--border-default); display: flex; justify-content: space-between; gap: 16px; }
 .modal-header h2 { margin: 0; font-size: 16px; font-weight: 650; }
@@ -181,6 +182,69 @@ input::placeholder { color: var(--text-muted); }
 .detection-list small { color: var(--text-muted); font-size: 10px; }
 .availability { color: var(--success); font-size: 10px; font-weight: 650; }
 
+.launcher-logo { flex: 0 0 auto; display: block; }
+.launcher-logo.explorer { color: #f2c94c; fill: color-mix(in srgb, #f2c94c 16%, transparent); }
+.launcher-logo.custom { color: var(--launcher-accent, var(--accent)); }
+.launcher-logo-frame { width: 38px; height: 38px; flex: 0 0 38px; border: 1px solid var(--border-default); border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--surface-secondary) 74%, transparent); }
+.launcher-logo-frame.large { width: 48px; height: 48px; flex-basis: 48px; border-radius: 9px; }
+.launcher-preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.launcher-preset-card { position: relative; min-width: 0; border: 1px solid var(--border-default); border-radius: 6px; background: var(--app-bg); overflow: hidden; transition: border-color 120ms ease, background 120ms ease; }
+.launcher-preset-card:hover { border-color: var(--border-strong); background: var(--surface-hover); }
+.launcher-preset-card.selected { border-color: var(--accent); background: var(--accent-muted); }
+.launcher-preset-card.unavailable { background: color-mix(in srgb, var(--surface-secondary) 45%, transparent); }
+.launcher-preset-select { width: 100%; min-width: 0; min-height: 61px; padding: 9px 38px 9px 9px; border: 0; display: flex; align-items: center; gap: 9px; color: var(--text-primary); background: transparent; text-align: left; cursor: pointer; }
+.launcher-preset-select:disabled { cursor: not-allowed; }
+.launcher-preset-select > span:nth-child(2) { min-width: 0; display: grid; gap: 3px; }
+.launcher-preset-select strong { font-size: 11px; font-weight: 650; }
+.launcher-preset-select small { color: var(--text-muted); font-size: 9px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.launcher-card-check { position: absolute; top: 7px; right: 7px; color: var(--accent); }
+.launcher-clone-button { position: absolute; right: 5px; bottom: 5px; width: 25px; height: 25px; padding: 0; border: 0; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: var(--text-muted); background: transparent; cursor: pointer; }
+.launcher-clone-button:hover { color: var(--text-primary); background: var(--surface-active); }
+.launcher-empty { width: 100%; min-height: 48px; border: 1px dashed var(--border-strong); border-radius: 5px; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--text-secondary); background: transparent; cursor: pointer; }
+.launcher-empty:hover { color: var(--text-primary); border-color: var(--accent); background: var(--accent-muted); }
+.launcher-custom-list { border: 1px solid var(--border-default); border-radius: 5px; overflow: hidden; }
+.launcher-custom-row { min-height: 50px; padding: 7px 8px 7px 10px; display: flex; align-items: center; gap: 9px; }
+.launcher-custom-row + .launcher-custom-row { border-top: 1px solid var(--border-default); }
+.launcher-profile-copy { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.launcher-profile-copy strong { font-size: 11px; }
+.launcher-profile-copy small { color: var(--text-muted); font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.launcher-availability { flex: 0 0 auto; font-size: 9px; font-weight: 650; }
+.launcher-availability.available { color: var(--success); }
+.launcher-availability.unavailable { color: var(--warning); }
+.launcher-row-actions { display: flex; }
+.launcher-set-default { min-height: 25px; font-size: 9px; white-space: nowrap; }
+.launcher-delete-confirm { flex: 1; display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+.launcher-delete-confirm small { color: var(--warning); font-size: 9px; }
+.launcher-delete-confirm .danger-button { min-height: 27px; padding-inline: 8px; font-size: 10px; }
+.launcher-delete-confirm .text-button { min-height: 27px; font-size: 10px; }
+
+.launcher-editor { display: grid; gap: 15px; }
+.launcher-editor-heading { display: flex; align-items: flex-end; gap: 10px; }
+.launcher-editor-heading .field { flex: 1; }
+.launcher-argument-editor { display: grid; gap: 6px; }
+.launcher-argument-editor > .section-title-row > strong { color: var(--text-secondary); font-size: 11px; }
+.launcher-argument-editor .text-button { gap: 4px; min-height: 24px; font-size: 10px; }
+.launcher-argument-list { display: grid; gap: 5px; }
+.launcher-argument-list label { display: grid; grid-template-columns: 24px minmax(0, 1fr) 29px; gap: 5px; align-items: center; }
+.launcher-argument-list label > span { color: var(--text-muted); font-size: 9px; text-align: center; }
+.launcher-argument-list input { height: 31px; font-family: var(--font-mono); font-size: 11px; }
+.launcher-argument-list .icon-button { width: 29px; height: 29px; }
+.launcher-appearance-editor { min-height: 60px; padding: 9px 10px; border: 1px solid var(--border-default); border-radius: 5px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.launcher-appearance-editor > div:first-child { display: grid; gap: 3px; }
+.launcher-appearance-editor strong { color: var(--text-secondary); font-size: 11px; }
+.launcher-appearance-editor small { color: var(--text-muted); font-size: 9px; }
+.launcher-icon-options { display: flex; align-items: center; gap: 5px; }
+.launcher-icon-options button { width: 34px; height: 34px; padding: 0; border: 1px solid var(--border-default); border-radius: 5px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); background: var(--app-bg); cursor: pointer; }
+.launcher-icon-options button.active { color: var(--accent); border-color: var(--accent); background: var(--accent-muted); }
+.launcher-icon-options input[type="color"] { width: 34px; height: 34px; padding: 3px; cursor: pointer; }
+.launcher-placeholder-help { padding: 10px; border: 1px solid var(--border-default); border-radius: 5px; display: grid; grid-template-columns: 1fr 1fr; gap: 7px 14px; color: var(--text-muted); font-size: 9px; }
+.launcher-placeholder-help > strong { grid-column: 1 / -1; color: var(--text-secondary); font-size: 10px; }
+.launcher-placeholder-help code { color: var(--accent); font-size: 9px; }
+.launcher-command-preview { min-width: 0; padding: 9px 10px; border: 1px solid var(--border-default); border-radius: 5px; display: grid; gap: 5px; background: var(--app-bg); }
+.launcher-command-preview strong { color: var(--text-secondary); font-size: 10px; }
+.launcher-command-preview code { min-width: 0; color: var(--accent); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.launcher-editor .form-error { display: flex; align-items: flex-start; gap: 7px; }
+
 .quick-open-search { height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--app-bg); }
 .quick-open-search input { height: 34px; border: 0; padding: 0; background: transparent; }
 .quick-open-search input:focus { outline: 0; }
@@ -197,6 +261,11 @@ input::placeholder { color: var(--text-muted); }
   .title-bar { grid-template-columns: 170px minmax(200px, 320px) 210px; }
   .workspace-sidebar { flex-basis: 200px; width: 200px; }
   .workspace-actions .secondary-button { display: none; }
+}
+@media (max-width: 700px) {
+  .launcher-preset-grid { grid-template-columns: 1fr; }
+  .launcher-placeholder-help { grid-template-columns: 1fr; }
+  .launcher-placeholder-help > strong { grid-column: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
