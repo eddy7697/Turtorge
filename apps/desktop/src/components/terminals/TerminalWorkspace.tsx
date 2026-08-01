@@ -1,6 +1,6 @@
 import { AlertCircle, X } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent } from "react";
-import type { LayoutNode, PaneNode, SplitDirection, Workspace } from "../../types";
+import type { LayoutNode, PaneNode, SplitDirection, TerminalDefinition, Workspace } from "../../types";
 import { paneCount } from "../../lib/layout";
 import { TerminalPane } from "./TerminalPane";
 
@@ -17,6 +17,8 @@ interface TerminalWorkspaceProps {
   onDeletePane: (paneId: string) => Promise<void>;
   onRemoveTerminal: (terminalId: string) => Promise<void>;
   onRenameTerminal: (terminalId: string, name: string) => Promise<void>;
+  onEditTerminal: (definition: TerminalDefinition) => Promise<void>;
+  onOpenLauncherSettings: () => void;
 }
 
 export function TerminalWorkspace(props: TerminalWorkspaceProps) {
@@ -97,6 +99,8 @@ function LayoutRenderer({ node, ...props }: { node: LayoutNode } & TerminalWorks
         onDeletePane={props.onDeletePane}
         onRemoveTerminal={props.onRemoveTerminal}
         onRenameTerminal={props.onRenameTerminal}
+        onEditTerminal={props.onEditTerminal}
+        onOpenLauncherSettings={props.onOpenLauncherSettings}
         onTabDragStart={props.onTabDragStart}
         onTabDragEnd={props.onTabDragEnd}
         onTabDragOver={props.onTabDragOver}

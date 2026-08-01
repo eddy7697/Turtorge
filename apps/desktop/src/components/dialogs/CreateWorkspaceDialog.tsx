@@ -5,6 +5,7 @@ import { createId } from "../../lib/ids";
 import { createPane } from "../../lib/layout";
 import type {
   EnvironmentVariable,
+  LauncherProfileStatus,
   PathKind,
   ShellProfile,
   TerminalProfileKind,
@@ -12,16 +13,21 @@ import type {
   WslDistribution,
 } from "../../types";
 import { EnvironmentEditor } from "../ui/EnvironmentEditor";
+import { LauncherProfileSelect } from "../ui/LauncherProfileSelect";
 import { Modal } from "../ui/Modal";
 
 export function CreateWorkspaceDialog({
   windowsShells,
   wslDistributions,
+  launcherProfiles = [],
+  globalDefaultLauncherId = null,
   onClose,
   onCreate,
 }: {
   windowsShells: ShellProfile[];
   wslDistributions: WslDistribution[];
+  launcherProfiles?: LauncherProfileStatus[];
+  globalDefaultLauncherId?: string | null;
   onClose: () => void;
   onCreate: (workspace: Workspace) => Promise<void>;
 }) {
@@ -39,6 +45,7 @@ export function CreateWorkspaceDialog({
   const [profile, setProfile] = useState<TerminalProfileKind>("shell");
   const [terminalName, setTerminalName] = useState("Shell");
   const [environmentVariables, setEnvironmentVariables] = useState<EnvironmentVariable[]>([]);
+  const [launcherProfileId, setLauncherProfileId] = useState<string | null>(null);
   const [loadingShells, setLoadingShells] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -126,6 +133,7 @@ export function CreateWorkspaceDialog({
             environmentVariables: [],
             startupCommand: null,
             autoStart: false,
+            launcherProfileId,
           },
         ],
         layout: createPane([terminalId]),
@@ -223,6 +231,8 @@ export function CreateWorkspaceDialog({
           <span>Terminal name</span>
           <input value={terminalName} onChange={(event) => setTerminalName(event.target.value)} />
         </label>
+
+        <LauncherProfileSelect launcherProfiles={launcherProfiles} value={launcherProfileId} globalDefaultProfileId={globalDefaultLauncherId} onChange={setLauncherProfileId} label="Initial terminal: Open with (optional)" helper="Leave blank to inherit the global launcher. You can change this per terminal later." />
 
         <details className="advanced-section full-width">
           <summary>Workspace environment variables</summary>

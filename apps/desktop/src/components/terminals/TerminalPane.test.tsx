@@ -3,10 +3,20 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "../../stores/appStore";
-import type { PaneNode, ShellProfile, TerminalDefinition, Workspace } from "../../types";
+import type { LauncherProfileStatus, PaneNode, ShellProfile, TerminalDefinition, Workspace } from "../../types";
 import { TerminalPane } from "./TerminalPane";
 
-vi.mock("../../lib/api", () => ({ closeTerminal: vi.fn() }));
+const apiMocks = vi.hoisted(() => ({
+  closeTerminal: vi.fn(),
+  openLauncher: vi.fn(),
+  chooseWindowsDirectory: vi.fn(),
+  chooseWslDirectory: vi.fn(),
+  detectWslShells: vi.fn(),
+  validatePath: vi.fn(),
+  updateSettings: vi.fn(),
+  listLauncherProfiles: vi.fn(),
+}));
+vi.mock("../../lib/api", () => apiMocks);
 const xtermLifecycle = vi.hoisted(() => ({ mount: vi.fn(), unmount: vi.fn() }));
 vi.mock("./XtermView", async () => {
   const { useEffect } = await import("react");
@@ -69,6 +79,23 @@ const workspace: Workspace = {
   openCount: 0,
 };
 
+const explorerStatus: LauncherProfileStatus = {
+  profile: {
+    id: "builtin-explorer",
+    name: "File Explorer",
+    program: "explorer.exe",
+    arguments: ["{path}"],
+    wslArguments: null,
+    detectionMode: "auto",
+    icon: "explorer",
+    accent: null,
+    builtIn: true,
+  },
+  available: true,
+  resolvedProgram: "C:\\Windows\\explorer.exe",
+  unavailableReason: null,
+};
+
 describe("TerminalPane", () => {
   afterEach(cleanup);
   beforeEach(() => {
@@ -79,7 +106,21 @@ describe("TerminalPane", () => {
       pendingConnections: {},
       startRequests: {},
       errors: {},
+      launcherProfiles: [explorerStatus],
+      windowsShells: [powerShell],
+      wslDistributions: [],
+      settings: {
+        theme: "system",
+        openLastWorkspace: true,
+        confirmBeforeClose: true,
+        sidebarWidth: 236,
+        lastActiveWorkspaceId: null,
+        defaultLauncherProfileId: null,
+        launcherProfiles: [],
+      },
     });
+    apiMocks.openLauncher.mockResolvedValue({ profileId: explorerStatus.profile.id, program: explorerStatus.resolvedProgram, arguments: [terminal.workingDirectory.value] });
+    apiMocks.validatePath.mockResolvedValue(true);
   });
 
   it("remounts the xterm view when the workspace identity changes", () => {
@@ -94,6 +135,8 @@ describe("TerminalPane", () => {
       onDeletePane: vi.fn(),
       onRemoveTerminal: vi.fn(),
       onRenameTerminal: vi.fn(),
+      onEditTerminal: vi.fn(),
+      onOpenLauncherSettings: vi.fn(),
       onTabDragStart: vi.fn(),
       onTabDragEnd: vi.fn(),
       onTabDragOver: vi.fn(),
@@ -108,7 +151,7 @@ describe("TerminalPane", () => {
     expect(xtermLifecycle.mount).toHaveBeenCalledWith("workspace-other");
   });
 
-  it("renames the active terminal from the pane action", async () => {
+  it("keeps double-click as the quick rename interaction", async () => {
     const onRenameTerminal = vi.fn().mockResolvedValue(undefined);
     render(
       <TerminalPane
@@ -123,6 +166,8 @@ describe("TerminalPane", () => {
         onDeletePane={vi.fn()}
         onRemoveTerminal={vi.fn()}
         onRenameTerminal={onRenameTerminal}
+        onEditTerminal={vi.fn()}
+        onOpenLauncherSettings={vi.fn()}
         onTabDragStart={vi.fn()}
         onTabDragEnd={vi.fn()}
         onTabDragOver={vi.fn()}
@@ -130,11 +175,45 @@ describe("TerminalPane", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Rename terminal" }));
+    fireEvent.doubleClick(screen.getByRole("tab", { name: /Original label/ }));
     fireEvent.change(screen.getByLabelText("Terminal name"), { target: { value: "API logs" } });
     fireEvent.click(screen.getByRole("button", { name: "Rename" }));
 
     await waitFor(() => expect(onRenameTerminal).toHaveBeenCalledWith("terminal-test", "API logs"));
+  });
+
+  it("opens the full terminal editor from the pencil action", () => {
+    renderPane();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit terminal" }));
+
+    expect(screen.getByRole("dialog").textContent).toContain("Edit Terminal");
+    expect(screen.getByLabelText("Startup command")).toBeTruthy();
+    expect(screen.getByText("Open with")).toBeTruthy();
+  });
+
+  it("opens first-run launcher setup with File Explorer selected", () => {
+    renderPane();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open working directory" }));
+
+    expect(screen.getByRole("dialog").textContent).toContain("Open working directory");
+    expect(screen.getByRole("radio", { name: /File Explorer/ })).toHaveProperty("checked", true);
+    expect(apiMocks.openLauncher).not.toHaveBeenCalled();
+  });
+
+  it("launches directly after a global default is configured", async () => {
+    useAppStore.setState((state) => ({
+      settings: { ...state.settings, defaultLauncherProfileId: explorerStatus.profile.id },
+    }));
+    renderPane();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open working directory in File Explorer" }));
+
+    await waitFor(() => expect(apiMocks.openLauncher).toHaveBeenCalledWith({
+      profileId: explorerStatus.profile.id,
+      path: terminal.workingDirectory,
+    }));
   });
 
   it("confirms deletion of a non-empty pane", async () => {
@@ -152,6 +231,8 @@ describe("TerminalPane", () => {
         onDeletePane={onDeletePane}
         onRemoveTerminal={vi.fn()}
         onRenameTerminal={vi.fn()}
+        onEditTerminal={vi.fn()}
+        onOpenLauncherSettings={vi.fn()}
         onTabDragStart={vi.fn()}
         onTabDragEnd={vi.fn()}
         onTabDragOver={vi.fn()}
@@ -182,6 +263,8 @@ describe("TerminalPane", () => {
         onDeletePane={vi.fn()}
         onRemoveTerminal={vi.fn()}
         onRenameTerminal={vi.fn()}
+        onEditTerminal={vi.fn()}
+        onOpenLauncherSettings={vi.fn()}
         onTabDragStart={vi.fn()}
         onTabDragEnd={vi.fn()}
         onTabDragOver={vi.fn()}
@@ -211,6 +294,8 @@ describe("TerminalPane", () => {
         onDeletePane={vi.fn()}
         onRemoveTerminal={vi.fn()}
         onRenameTerminal={vi.fn()}
+        onEditTerminal={vi.fn()}
+        onOpenLauncherSettings={vi.fn()}
         onTabDragStart={onTabDragStart}
         onTabDragEnd={vi.fn()}
         onTabDragOver={onTabDragOver}
@@ -246,6 +331,8 @@ describe("TerminalPane", () => {
         onDeletePane={vi.fn()}
         onRemoveTerminal={vi.fn()}
         onRenameTerminal={vi.fn()}
+        onEditTerminal={vi.fn()}
+        onOpenLauncherSettings={vi.fn()}
         onTabDragStart={vi.fn()}
         onTabDragEnd={vi.fn()}
         onTabDragOver={vi.fn()}
@@ -268,3 +355,27 @@ describe("TerminalPane", () => {
     expect(strip!.scrollLeft).toBe(110);
   });
 });
+
+function renderPane() {
+  return render(
+    <TerminalPane
+      pane={pane}
+      workspace={workspace}
+      canDeletePane={false}
+      dragging={null}
+      dropTarget={null}
+      onSelectTerminal={vi.fn()}
+      onNewTerminal={vi.fn()}
+      onSplit={vi.fn()}
+      onDeletePane={vi.fn()}
+      onRemoveTerminal={vi.fn()}
+      onRenameTerminal={vi.fn()}
+      onEditTerminal={vi.fn()}
+      onOpenLauncherSettings={vi.fn()}
+      onTabDragStart={vi.fn()}
+      onTabDragEnd={vi.fn()}
+      onTabDragOver={vi.fn()}
+      onTabDrop={vi.fn()}
+    />,
+  );
+}

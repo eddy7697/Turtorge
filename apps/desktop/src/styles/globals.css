@@ -187,6 +187,10 @@ input::placeholder { color: var(--text-muted); }
 .launcher-logo.custom { color: var(--launcher-accent, var(--accent)); }
 .launcher-logo-frame { width: 38px; height: 38px; flex: 0 0 38px; border: 1px solid var(--border-default); border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--surface-secondary) 74%, transparent); }
 .launcher-logo-frame.large { width: 48px; height: 48px; flex-basis: 48px; border-radius: 9px; }
+.launcher-logo-frame.compact { width: 34px; height: 34px; flex-basis: 34px; border-radius: 4px; }
+.launcher-later-mark { color: var(--text-muted); font-weight: 700; }
+.launcher-profile-select { display: flex; gap: 6px; }
+.launcher-profile-select select { flex: 1; min-width: 0; }
 .launcher-preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .launcher-preset-card { position: relative; min-width: 0; border: 1px solid var(--border-default); border-radius: 6px; background: var(--app-bg); overflow: hidden; transition: border-color 120ms ease, background 120ms ease; }
 .launcher-preset-card:hover { border-color: var(--border-strong); background: var(--surface-hover); }
@@ -244,6 +248,28 @@ input::placeholder { color: var(--text-muted); }
 .launcher-command-preview strong { color: var(--text-secondary); font-size: 10px; }
 .launcher-command-preview code { min-width: 0; color: var(--accent); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .launcher-editor .form-error { display: flex; align-items: flex-start; gap: 7px; }
+.launcher-setup { display: grid; gap: 12px; }
+.launcher-setup-path { min-width: 0; padding: 9px 10px; border: 1px solid var(--border-default); border-radius: 5px; display: grid; gap: 4px; background: var(--app-bg); }
+.launcher-setup-path span { color: var(--text-muted); font-size: 9px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
+.launcher-setup-path code { overflow: hidden; color: var(--text-secondary); font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
+.launcher-setup-options { max-height: 330px; overflow-y: auto; border: 1px solid var(--border-default); border-radius: 5px; }
+.launcher-setup-options label { position: relative; min-height: 57px; padding: 8px 10px; display: flex; align-items: center; gap: 9px; cursor: pointer; }
+.launcher-setup-options label + label { border-top: 1px solid var(--border-default); }
+.launcher-setup-options label:hover { background: var(--surface-hover); }
+.launcher-setup-options label.selected { background: var(--accent-muted); }
+.launcher-setup-options label.unavailable { cursor: not-allowed; opacity: .62; }
+.launcher-setup-options input { width: 14px; height: 14px; flex: 0 0 14px; accent-color: var(--accent); }
+.launcher-setup-options label > span:nth-of-type(2) { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.launcher-setup-options strong { font-size: 11px; }
+.launcher-setup-options small { color: var(--text-muted); font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.launcher-setup-options i { color: var(--success); font-size: 9px; font-style: normal; font-weight: 650; }
+.launcher-setup-options .unavailable i { color: var(--warning); }
+.launcher-setup-note { margin: 0; color: var(--text-muted); font-size: 9px; line-height: 1.45; }
+.terminal-restart-summary { padding: 11px; border: 1px solid color-mix(in srgb, var(--warning) 38%, transparent); border-radius: 5px; display: flex; align-items: flex-start; gap: 9px; color: var(--warning); background: color-mix(in srgb, var(--warning) 9%, transparent); }
+.terminal-restart-summary span { display: grid; gap: 4px; }
+.terminal-restart-summary strong { color: var(--text-primary); font-size: 11px; }
+.terminal-restart-summary small { color: var(--text-secondary); font-size: 10px; line-height: 1.45; }
+.terminal-edit-error { margin-top: 10px; }
 
 .quick-open-search { height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--app-bg); }
 .quick-open-search input { height: 34px; border: 0; padding: 0; background: transparent; }

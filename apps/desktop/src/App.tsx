@@ -211,6 +211,15 @@ function TurtorgeApp() {
       ),
     });
   };
+  const editTerminal = async (definition: TerminalDefinition) => {
+    if (!workspace) return;
+    await persist({
+      ...workspace,
+      terminals: workspace.terminals.map((terminal) =>
+        terminal.id === definition.id ? definition : terminal,
+      ),
+    });
+  };
   const createWorkspace = async (created: Workspace) => {
     await saveWorkspace(created);
     await selectWorkspace(created.id);
@@ -249,13 +258,13 @@ function TurtorgeApp() {
       <div className="app-body">
         <WorkspaceSidebar workspaces={workspaces} activeWorkspaceId={workspace?.id ?? null} runtimes={runtimes} errors={errors} pendingConnections={pendingConnections} collapsed={sidebarCollapsed} onSelect={(id) => void selectWorkspace(id)} onSelectTerminal={(workspaceId, paneId, terminalId) => void selectSidebarTerminal(workspaceId, paneId, terminalId).catch(() => undefined)} onCreate={() => setDialog("createWorkspace")} onSettings={() => setDialog("settings")} />
         <main className="main-content">
-          {workspace ? <><WorkspaceHeader workspace={workspace} runtimes={runtimes} onNewTerminal={() => openNewTerminal()} /><TerminalWorkspace workspace={workspace} layoutError={layoutError} terminalFocusRequest={terminalFocusRequest} onDismissLayoutError={() => setLayoutError(null)} onSelectTerminal={selectTerminal} onNewTerminal={openNewTerminal} onSplit={split} onRatioChange={ratioChange} onMoveTerminal={moveTerminalTab} onDeletePane={deletePane} onRemoveTerminal={removeTerminal} onRenameTerminal={renameTerminal} /></> : <EmptyState onCreate={() => setDialog("createWorkspace")} />}
+          {workspace ? <><WorkspaceHeader workspace={workspace} runtimes={runtimes} onNewTerminal={() => openNewTerminal()} /><TerminalWorkspace workspace={workspace} layoutError={layoutError} terminalFocusRequest={terminalFocusRequest} onDismissLayoutError={() => setLayoutError(null)} onSelectTerminal={selectTerminal} onNewTerminal={openNewTerminal} onSplit={split} onRatioChange={ratioChange} onMoveTerminal={moveTerminalTab} onDeletePane={deletePane} onRemoveTerminal={removeTerminal} onRenameTerminal={renameTerminal} onEditTerminal={editTerminal} onOpenLauncherSettings={() => setDialog("settings")} /></> : <EmptyState onCreate={() => setDialog("createWorkspace")} />}
         </main>
       </div>
       <StatusBar workspace={workspace} runtimes={runtimes} />
 
-      {dialog === "createWorkspace" && <CreateWorkspaceDialog windowsShells={windowsShells} wslDistributions={wslDistributions} onClose={() => setDialog(null)} onCreate={createWorkspace} />}
-      {dialog === "newTerminal" && workspace && <NewTerminalDialog workspace={workspace} windowsShells={windowsShells} wslDistributions={wslDistributions} onClose={() => setDialog(null)} onCreate={createTerminal} />}
+      {dialog === "createWorkspace" && <CreateWorkspaceDialog windowsShells={windowsShells} wslDistributions={wslDistributions} launcherProfiles={launcherProfiles} globalDefaultLauncherId={settings.defaultLauncherProfileId} onClose={() => setDialog(null)} onCreate={createWorkspace} />}
+      {dialog === "newTerminal" && workspace && <NewTerminalDialog workspace={workspace} windowsShells={windowsShells} wslDistributions={wslDistributions} launcherProfiles={launcherProfiles} globalDefaultLauncherId={settings.defaultLauncherProfileId} onClose={() => setDialog(null)} onCreate={createTerminal} />}
       {dialog === "settings" && <SettingsDialog settings={settings} launcherProfiles={launcherProfiles} workspaces={workspaces} windowsShells={windowsShells} wslDistributions={wslDistributions} onChange={updateSettings} onDeleteProfile={deleteLauncherProfile} onClose={() => setDialog(null)} />}
       {dialog === "quickOpen" && <QuickOpenDialog workspaces={workspaces} onSelect={(id) => void selectWorkspace(id)} onClose={() => setDialog(null)} />}
       {dialog === "quit" && <ConfirmQuitDialog workspaceCount={runningWorkspaceCount} terminalCount={runningCount} onCancel={() => setDialog(null)} onConfirm={() => void finishQuit()} />}

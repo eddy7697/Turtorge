@@ -2,20 +2,25 @@ import { FolderOpen, LoaderCircle } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { chooseWindowsDirectory, chooseWslDirectory, detectWslShells, validatePath } from "../../lib/api";
 import { createId } from "../../lib/ids";
-import type { EnvironmentVariable, PathKind, ShellProfile, TerminalDefinition, TerminalProfileKind, Workspace, WorkspacePath, WslDistribution } from "../../types";
+import type { EnvironmentVariable, LauncherProfileStatus, PathKind, ShellProfile, TerminalDefinition, TerminalProfileKind, Workspace, WorkspacePath, WslDistribution } from "../../types";
 import { EnvironmentEditor } from "../ui/EnvironmentEditor";
+import { LauncherProfileSelect } from "../ui/LauncherProfileSelect";
 import { Modal } from "../ui/Modal";
 
 export function NewTerminalDialog({
   workspace,
   windowsShells,
   wslDistributions,
+  launcherProfiles = [],
+  globalDefaultLauncherId = null,
   onClose,
   onCreate,
 }: {
   workspace: Workspace;
   windowsShells: ShellProfile[];
   wslDistributions: WslDistribution[];
+  launcherProfiles?: LauncherProfileStatus[];
+  globalDefaultLauncherId?: string | null;
   onClose: () => void;
   onCreate: (definition: TerminalDefinition) => Promise<void>;
 }) {
@@ -32,6 +37,7 @@ export function NewTerminalDialog({
   const [command, setCommand] = useState("");
   const [variables, setVariables] = useState<EnvironmentVariable[]>([]);
   const [autoStart, setAutoStart] = useState(false);
+  const [launcherProfileId, setLauncherProfileId] = useState<string | null>(null);
   const [loadingShells, setLoadingShells] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -139,6 +145,7 @@ export function NewTerminalDialog({
         startupCommand: profile === "custom" ? command.trim() || null : null,
         environmentVariables: variables.filter((item) => item.key.trim()),
         autoStart,
+        launcherProfileId,
       });
       onClose();
     } catch (reason) {
@@ -164,6 +171,7 @@ export function NewTerminalDialog({
         <label className="field"><span>Name</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
         <div className="field full-width"><label htmlFor="new-terminal-working-directory">Working directory</label><div className="input-with-action"><input id="new-terminal-working-directory" value={workingDirectory.value} placeholder={environment === "wsl" ? "~/projects/app or C:\\Projects\\App" : "C:\\Projects\\App"} onChange={(event) => changeWorkingDirectory(event.target.value)} /><button type="button" className="icon-button" onClick={() => void browseWorkingDirectory()} aria-label={environment === "wsl" ? "Browse WSL folders" : "Browse folders"} title="Browse folders"><FolderOpen size={15} /></button></div>{environment === "wsl" && <small>Saved for this terminal. If the folder disappears later, Turtorge starts it in ~ and shows a notice.</small>}</div>
         {profile === "custom" && <label className="field full-width"><span>Startup command</span><input value={command} placeholder="pnpm dev" onChange={(event) => setCommand(event.target.value)} /></label>}
+        <LauncherProfileSelect launcherProfiles={launcherProfiles} value={launcherProfileId} globalDefaultProfileId={globalDefaultLauncherId} onChange={setLauncherProfileId} label="Open with (optional)" helper="Leave blank to inherit the global launcher. This does not open anything when the terminal starts." />
         <label className="checkbox-field full-width"><input type="checkbox" checked={autoStart} onChange={(event) => setAutoStart(event.target.checked)} /><span><strong>Auto Start</strong><small>Start this terminal when the workspace is restored.</small></span></label>
         <details className="advanced-section full-width"><summary>Terminal environment variables</summary><p>Values are stored as plain text. Do not store secrets.</p><EnvironmentEditor value={variables} onChange={setVariables} /></details>
         {loadingShells && <div className="form-status full-width" role="status" aria-live="polite"><LoaderCircle className="spin" size={15} /><span><strong>Detecting WSL shells…</strong><small>Starting {distribution} if needed and checking its available login shells.</small></span></div>}

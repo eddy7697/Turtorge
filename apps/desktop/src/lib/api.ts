@@ -44,6 +44,19 @@ const mockExplorerLauncher: LauncherProfile = {
   builtIn: true,
 };
 
+const mockBuiltInLaunchers: LauncherProfile[] = [
+  mockExplorerLauncher,
+  mockLauncher("builtin-vscode", "Visual Studio Code", "code", "vsCode", ["{path}"], ["--remote", "wsl+{distribution}", "{wslPath}"]),
+  mockLauncher("builtin-cursor", "Cursor", "cursor", "cursor", ["{path}"], ["--remote", "wsl+{distribution}", "{wslPath}"]),
+  mockLauncher("builtin-antigravity", "Antigravity", "antigravity", "antigravity"),
+  mockLauncher("builtin-zed", "Zed", "zed", "zed"),
+  mockLauncher("builtin-intellij", "IntelliJ IDEA", "idea64", "intelliJ"),
+  mockLauncher("builtin-rider", "JetBrains Rider", "rider64", "rider"),
+  mockLauncher("builtin-webstorm", "WebStorm", "webstorm64", "webStorm"),
+  mockLauncher("builtin-pycharm", "PyCharm", "pycharm64", "pyCharm"),
+  mockLauncher("builtin-unity", "Unity", "Unity.exe", "unity", ["-projectPath", "{projectRoot}"]),
+];
+
 const mockPowerShell: ShellProfile = {
   id: "powershell-7.5.2",
   name: "PowerShell 7.5.2",
@@ -167,12 +180,12 @@ function mockBootstrap(): BootstrapPayload {
       { name: "Ubuntu-20.04", isDefault: true, isRunning: true, version: 2 },
     ],
     launcherProfiles: [
-      {
-        profile: mockExplorerLauncher,
-        available: true,
-        resolvedProgram: "C:\\Windows\\explorer.exe",
-        unavailableReason: null,
-      },
+      ...mockBuiltInLaunchers.map((profile, index) => ({
+        profile,
+        available: index < 4,
+        resolvedProgram: index < 4 ? profile.program : null,
+        unavailableReason: index < 4 ? null : `${profile.name} was not found.`,
+      })),
       ...mockSettings.launcherProfiles.map((profile) => ({
         profile: structuredClone(profile),
         available: Boolean(profile.program),
@@ -392,4 +405,25 @@ function mockTerminalOutput(name: string): string {
   return `\u001b[38;2;114;216;201mTurtorge\u001b[0m · ${name}\r\n` +
     `\u001b[90mInteractive PTY ready. This browser preview uses a mock stream.\u001b[0m\r\n\r\n` +
     `\u001b[38;2;114;216;201m➜\u001b[0m  \u001b[38;2;121;184;232mturtorge\u001b[0m git:(\u001b[31mdevelop\u001b[0m) `;
+}
+
+function mockLauncher(
+  id: string,
+  name: string,
+  program: string,
+  icon: LauncherProfile["icon"],
+  args: string[] = ["{path}"],
+  wslArguments: string[] | null = null,
+): LauncherProfile {
+  return {
+    id,
+    name,
+    program,
+    arguments: args,
+    wslArguments,
+    detectionMode: "auto",
+    icon,
+    accent: null,
+    builtIn: true,
+  };
 }

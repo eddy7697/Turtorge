@@ -1,4 +1,4 @@
-import { ExternalLink, Plus, RotateCw, TerminalSquare } from "lucide-react";
+import { Plus, RotateCw, TerminalSquare } from "lucide-react";
 import type { TerminalRuntimeSnapshot, Workspace } from "../../types";
 
 export function WorkspaceHeader({
@@ -30,9 +30,6 @@ export function WorkspaceHeader({
         </div>
       </div>
       <div className="workspace-actions">
-        <button className="secondary-button" disabled title="External editor profiles are planned after the vertical slice">
-          <ExternalLink size={14} /> Open Editor
-        </button>
         <button className="primary-button" onClick={onNewTerminal}>
           <Plus size={14} /> Terminal
         </button>
@@ -44,4 +41,3 @@ export function WorkspaceHeader({
     </header>
   );
 }
-
