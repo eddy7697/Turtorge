@@ -2,66 +2,115 @@
 
 ![Turtorge logo](images/logo.png)
 
-Turtorge is a Windows-first, workspace-oriented terminal manager. It keeps PowerShell, WSL shells, development commands, and AI CLI profiles inside one application-controlled layout.
+Turtorge is a Windows-first, workspace-oriented terminal manager. It keeps PowerShell, WSL shells, development commands, and AI CLI tools inside one application-owned layout instead of opening external console windows.
 
-The current implementation is a working Windows MVP built from the product documents in [`docs/`](docs/). It uses a native PTY rather than opening Windows Terminal or external console windows.
+The repository contains a working Windows MVP plus the completed workspace-navigation, terminal-interaction, external-launcher, persistent-TUI-rendering, and context-menu follow-ups. Turtorge uses native Windows ConPTY sessions through Rust and renders them with xterm.js inside a Tauri desktop window.
 
-## Implemented
+## Highlights
 
-- Embedded xterm.js terminals with application-owned tabs and nested horizontal/vertical splits.
-- Rust-owned PTY, process lifecycle, resize, input/output streaming, and graceful-then-forced termination.
-- PowerShell detection with the highest installed version selected by default and all detected versions available.
-- WSL distribution discovery, excluding Docker-managed distributions.
-- Per-distribution bash/zsh detection, default-shell preference, and explicit shell selection.
-- Native interactive WSL login shells (`zsh -l -i` and `bash -l -i`) under the distribution's default user.
-- Windows, UNC, mounted-drive, and WSL-native working-directory validation without silent fallback.
-- Workspace JSON persistence, last-workspace restore, nested layout persistence, pinned/favorite metadata, and per-terminal environment variables.
-- Shell, Claude Code, Codex, and custom terminal profiles.
-- In-memory scrollback only; terminal input and output are never persisted to disk.
-- Multi-line paste warning, running-terminal close confirmation, and app-quit confirmation that prevents orphan processes.
-- Custom borderless title bar, responsive 900×600 minimum layout, and system/light/dark themes.
+### Workspaces and layouts
 
-## Stack
+- Application-owned terminal tabs, panes, and recursive horizontal or vertical splits.
+- Draggable split ratios and same-workspace tab reordering or cross-pane tab movement.
+- Independently expandable workspace rows with saved terminals listed in pane/tab order.
+- Pinned and recent workspaces, quick open, runtime activity indicators, and last-workspace restoration.
+- Persistent xterm.js instances across terminal and workspace switches, preserving stateful TUI applications such as Claude Code and k9s.
+- Protected final pane, confirmed non-empty pane deletion, and sibling-tree promotion after deletion.
+
+### Shells and terminal lifecycle
+
+- Automatic PowerShell discovery with the highest installed version selected by default.
+- Dynamic WSL distribution discovery with Docker-managed distributions hidden.
+- Per-distribution login-shell detection and native interactive `zsh -l -i` or `bash -l -i` startup.
+- Windows, UNC, WSL-mounted, and WSL-native working-directory models with visible validation failures.
+- Explicit startup, force restart, close, process-exit, resize, input, and output lifecycle management in Rust.
+- Shell, Claude Code, Codex, and custom command profiles with per-terminal environment variables and auto-start settings.
+- Shift+Enter terminal encoding for compatible foreground TUI applications.
+
+### Terminal and workspace actions
+
+| Surface | Primary actions |
+| --- | --- |
+| Terminal tab or sidebar terminal | Open externally, start or force restart, rename, edit, and delete |
+| Workspace row | Create a terminal in that workspace and rename the workspace |
+| Pane action area | Create a terminal, split right, split down, and delete the pane |
+| Terminal tab strip | Reorder tabs, move tabs between panes, and use the mouse wheel for horizontal overflow |
+
+Context menus support right-click, Shift+F10, the Menu key, arrow-key navigation, Enter, and Escape with focus restoration. Right-clicking an inactive workspace or terminal targets that item without silently switching the current selection. Double-clicking a terminal tab remains the quick-rename path.
+
+### External launchers
+
+- Global launcher default with per-terminal overrides.
+- Built-in profiles for File Explorer, Visual Studio Code, Cursor, Antigravity, Zed, IntelliJ IDEA, Rider, WebStorm, PyCharm, and Unity.
+- Availability detection without executing candidate applications.
+- Cloneable custom profiles using a structured executable and argument-token model.
+- Typed `{path}`, `{wslPath}`, `{distribution}`, and `{projectRoot}` placeholders.
+- WSL-aware path conversion and exact Unity Editor version resolution.
+- Detached launcher processes that are not counted or terminated as Turtorge terminal sessions.
+
+### Safety, persistence, and appearance
+
+- Terminal input, output, and scrollback are never persisted to disk.
+- Runtime scrollback is bounded to 1 MiB per running terminal and held only in memory.
+- Atomic JSON persistence for workspace definitions and settings.
+- Visible shell and working-directory failures without silent fallback to another shell or arbitrary folder.
+- Multi-line paste, running-terminal close, destructive pane, and application-quit confirmations.
+- Custom borderless title bar, system/light/dark themes, and a responsive 900×600 minimum layout.
+- Plaintext environment-variable storage with an explicit warning in the UI.
+
+## Technology
 
 - Tauri v2 and Rust 2024
-- `portable-pty` 0.9 / Windows ConPTY
-- React 19, TypeScript, Vite, Zustand
+- `portable-pty` 0.9 over Windows ConPTY
+- React 19, TypeScript, Vite, and Zustand
 - xterm.js 6 with fit and web-links addons
-- Vitest and Rust unit/integration tests
+- Vitest plus Rust unit and opt-in native PTY integration tests
 
-## Run locally
-
-Prerequisites:
+## Requirements
 
 - Windows 10 or 11 with WebView2
-- Rust stable with the MSVC toolchain
+- Rust stable with the MSVC toolchain and a Windows SDK
 - Node.js and pnpm 11
-- WSL only if WSL profiles are required
+- WSL only when WSL terminal profiles are required
+
+## Development
+
+Install the locked dependencies and start the native application:
 
 ```powershell
-pnpm install
+pnpm install --frozen-lockfile
 pnpm tauri:dev
 ```
 
-Frontend-only preview:
+For a frontend-only preview with a mock terminal stream:
 
 ```powershell
 pnpm dev
 ```
 
-The browser preview uses a mock terminal stream. Use `pnpm tauri:dev` to exercise real PowerShell and WSL PTYs.
+Use the Tauri development command when testing real PowerShell or WSL PTYs, native dialogs, launchers, window behavior, or application lifecycle.
 
-## Build a standalone release
+## Build a standalone Windows release
 
-Run [`build-latest.bat`](build-latest.bat) from File Explorer or a terminal. It synchronizes the locked pnpm dependencies, builds the current source through the Tauri CLI with `--no-bundle`, and writes the standalone executable to a unique date-stamped directory:
+Run [`build-latest.bat`](build-latest.bat) from File Explorer or a terminal:
+
+```powershell
+.\build-latest.bat
+```
+
+The script synchronizes the locked pnpm dependencies and builds the current source through the Tauri CLI with `--no-bundle`. Every invocation uses a unique Cargo target directory:
 
 ```text
 artifacts/YYYY-MM-DD_HH-mm-ss_fff/release/turtorge.exe
 ```
 
-Each build uses an isolated Cargo target directory, so it does not replace the standard release or any previously built executable that may still be running.
+The isolated directory prevents the build from replacing the standard release or any previous executable that may still be running. This produces a standalone executable, not an installer; installer packaging, signing, and auto-update remain deferred.
 
-## Verify
+Do not use a bare `cargo build --release` for delivery. It does not apply the Tauri CLI production configuration and may produce an executable that still expects the Vite development server.
+
+## Verification
+
+Run the default frontend and Rust checks:
 
 ```powershell
 pnpm test
@@ -70,30 +119,43 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-The opt-in native PTY test launches installed shells and requires a local WSL distribution:
+The opt-in native PTY test requires locally installed shells and a WSL distribution:
 
 ```powershell
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml real_wsl_login_shells_round_trip_through_a_pty -- --ignored --nocapture
 ```
 
-It exercises PowerShell plus every detected bash/zsh profile through a real ConPTY, including input, output, login-shell startup, and clean exit.
+It exercises detected PowerShell, WSL bash, and WSL zsh profiles through real ConPTY sessions, including startup, input/output, working-directory behavior, and clean exit.
+
+The current verified frontend suite contains 42 tests. Production builds emit a known non-blocking warning because the main JavaScript chunk exceeds 500 kB; code splitting remains a future optimization.
 
 ## Architecture
 
-- [`apps/desktop/src/`](apps/desktop/src/) owns presentation, xterm instances, interaction state, and typed IPC calls.
-- [`apps/desktop/src-tauri/src/terminal.rs`](apps/desktop/src-tauri/src/terminal.rs) owns PTYs, child processes, in-memory scrollback, and runtime events.
+- [`apps/desktop/src/`](apps/desktop/src/) owns React presentation, layout interaction, xterm.js instances, and typed Tauri IPC calls.
+- [`apps/desktop/src/components/terminals/`](apps/desktop/src/components/terminals/) owns pane/tab rendering, persistent terminal views, terminal actions, and terminal keyboard behavior.
+- [`apps/desktop/src-tauri/src/terminal.rs`](apps/desktop/src-tauri/src/terminal.rs) owns PTYs, child processes, subscribers, lifecycle transitions, and in-memory scrollback.
 - [`apps/desktop/src-tauri/src/platform.rs`](apps/desktop/src-tauri/src/platform.rs) isolates Windows, PowerShell, WSL, shell, and path detection.
-- [`apps/desktop/src-tauri/src/storage.rs`](apps/desktop/src-tauri/src/storage.rs) performs atomic JSON persistence in the application data directory.
-- [`apps/desktop/src/lib/layout.ts`](apps/desktop/src/lib/layout.ts) contains the immutable split/tree layout operations.
+- [`apps/desktop/src-tauri/src/launcher.rs`](apps/desktop/src-tauri/src/launcher.rs) validates and launches external file managers, editors, IDEs, and Unity.
+- [`apps/desktop/src-tauri/src/storage.rs`](apps/desktop/src-tauri/src/storage.rs) performs atomic workspace and settings persistence.
+- [`apps/desktop/src/lib/layout.ts`](apps/desktop/src/lib/layout.ts) contains immutable split-tree and tab-layout operations.
 
-Configuration and runtime are deliberately separate. Switching workspaces detaches the xterm view but leaves its Rust-owned process running; quitting Turtorge terminates every managed process after one confirmation.
+Configuration and runtime are deliberately separate. Turtorge definitions persist to disk, while Rust owns live processes and React keeps terminal emulators mounted for routine switching. Quitting Turtorge terminates every managed process after confirmation; external launchers remain detached.
 
-## Current MVP boundary
+## Repository documentation
 
-Installer packaging, auto-update, macOS/Linux builds, manifest import, secure secret storage, tags/groups, and the full settings matrix remain deferred. Environment-variable values are currently stored as plaintext configuration and the UI warns users accordingly.
+- [`docs/PRD.md`](docs/PRD.md) — product requirements.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system boundaries and architecture.
+- [`docs/UI_SPEC.md`](docs/UI_SPEC.md) — interaction and visual specification.
+- [`docs/MVP_IMPLEMENTATION.md`](docs/MVP_IMPLEMENTATION.md) — confirmed MVP implementation decisions.
+- [`docs/DEVELOPMENT_HISTORY.md`](docs/DEVELOPMENT_HISTORY.md) — authoritative decisions, discoveries, verification, and delivery history.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — staged product direction.
 
-See [`docs/MVP_IMPLEMENTATION.md`](docs/MVP_IMPLEMENTATION.md) for the decisions confirmed during product grilling and the implementation boundary.
+## Current product boundary
 
-## Design
+The following remain intentionally deferred: installer packaging and signing, auto-update, native macOS/Linux delivery, manifest import/export and repository trust, secure secret storage, diagnostic export, tags/groups, Git Bash, SSH, container and remote adapters, cross-workspace tab dragging, keyboard tab movement, and command-palette launcher access.
 
-The UI follows the approved Superdesign exploration and the local design tokens in [`.superdesign/design-system.md`](.superdesign/design-system.md). The generated app icon is a deterministic transparent crop of the supplied turtle artwork; [`images/logo.png`](images/logo.png) remains unchanged.
+These are future phases rather than incomplete items in the approved Windows MVP. The non-negotiable boundaries remain: terminals stay embedded in Turtorge, the application owns tabs/panes/layouts, Rust owns PTYs and lifecycle, terminal content is not persisted, and shell or path failures remain visible.
+
+## Design and branding
+
+The UI follows the approved Superdesign explorations and the local tokens in [`.superdesign/design-system.md`](.superdesign/design-system.md). The original artwork remains at [`images/logo.png`](images/logo.png); generated application and platform icons are derived from it without modifying the source image.
