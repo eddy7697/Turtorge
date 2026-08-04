@@ -103,6 +103,10 @@ describe("WorkspaceSidebar", () => {
         collapsed={false}
         onSelect={vi.fn()}
         onSelectTerminal={onSelectTerminal}
+        workspaceContextTargetId={null}
+        terminalContextTargetId={null}
+        onWorkspaceContextMenu={vi.fn()}
+        onTerminalContextMenu={vi.fn()}
         onCreate={vi.fn()}
         onSettings={vi.fn()}
       />,
@@ -135,6 +139,10 @@ describe("WorkspaceSidebar", () => {
       collapsed: false,
       onSelect: vi.fn(),
       onSelectTerminal: vi.fn(),
+      workspaceContextTargetId: null,
+      terminalContextTargetId: null,
+      onWorkspaceContextMenu: vi.fn(),
+      onTerminalContextMenu: vi.fn(),
       onCreate: vi.fn(),
       onSettings: vi.fn(),
     };
@@ -146,5 +154,38 @@ describe("WorkspaceSidebar", () => {
     rerender(<WorkspaceSidebar {...props} activeWorkspaceId="workspace-other" />);
     expect(screen.getByRole("group", { name: "Other terminals" })).toBeTruthy();
     expect(screen.queryByRole("group", { name: "Test terminals" })).toBeNull();
+  });
+
+  it("opens workspace and terminal context menus without changing selection", () => {
+    const onSelect = vi.fn();
+    const onSelectTerminal = vi.fn();
+    const onWorkspaceContextMenu = vi.fn();
+    const onTerminalContextMenu = vi.fn();
+    render(
+      <WorkspaceSidebar
+        workspaces={[workspace()]}
+        activeWorkspaceId="workspace-test"
+        runtimes={{}}
+        errors={{}}
+        pendingConnections={{}}
+        collapsed={false}
+        onSelect={onSelect}
+        onSelectTerminal={onSelectTerminal}
+        workspaceContextTargetId={null}
+        terminalContextTargetId={null}
+        onWorkspaceContextMenu={onWorkspaceContextMenu}
+        onTerminalContextMenu={onTerminalContextMenu}
+        onCreate={vi.fn()}
+        onSettings={vi.fn()}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Visible terminal, Not running" }), { clientX: 80, clientY: 120 });
+    expect(onTerminalContextMenu).toHaveBeenCalledWith(expect.objectContaining({ id: "workspace-test" }), terminals[0], { x: 80, y: 120 });
+    expect(onSelectTerminal).not.toHaveBeenCalled();
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "TestPinned workspace" }), { clientX: 48, clientY: 64 });
+    expect(onWorkspaceContextMenu).toHaveBeenCalledWith(expect.objectContaining({ id: "workspace-test" }), { x: 48, y: 64 });
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

@@ -135,9 +135,9 @@ describe("TerminalPane", () => {
       onNewTerminal: vi.fn(),
       onSplit: vi.fn(),
       onDeletePane: vi.fn(),
-      onRemoveTerminal: vi.fn(),
       onRenameTerminal: vi.fn(),
-      onEditTerminal: vi.fn(),
+      terminalContextTargetId: null,
+      onTerminalContextMenu: vi.fn(),
       onOpenLauncherSettings: vi.fn(),
       onTabDragStart: vi.fn(),
       onTabDragEnd: vi.fn(),
@@ -169,9 +169,9 @@ describe("TerminalPane", () => {
       onNewTerminal: vi.fn(),
       onSplit: vi.fn(),
       onDeletePane: vi.fn(),
-      onRemoveTerminal: vi.fn(),
       onRenameTerminal: vi.fn(),
-      onEditTerminal: vi.fn(),
+      terminalContextTargetId: null,
+      onTerminalContextMenu: vi.fn(),
       onOpenLauncherSettings: vi.fn(),
       onTabDragStart: vi.fn(),
       onTabDragEnd: vi.fn(),
@@ -201,9 +201,9 @@ describe("TerminalPane", () => {
         onNewTerminal={vi.fn()}
         onSplit={vi.fn()}
         onDeletePane={vi.fn()}
-        onRemoveTerminal={vi.fn()}
         onRenameTerminal={onRenameTerminal}
-        onEditTerminal={vi.fn()}
+        terminalContextTargetId={null}
+        onTerminalContextMenu={vi.fn()}
         onOpenLauncherSettings={vi.fn()}
         onTabDragStart={vi.fn()}
         onTabDragEnd={vi.fn()}
@@ -219,14 +219,17 @@ describe("TerminalPane", () => {
     await waitFor(() => expect(onRenameTerminal).toHaveBeenCalledWith("terminal-test", "API logs"));
   });
 
-  it("opens the full terminal editor from the pencil action", () => {
-    renderPane();
+  it("opens terminal actions from a tab context menu without selecting it", () => {
+    const onSelectTerminal = vi.fn();
+    const onTerminalContextMenu = vi.fn();
+    renderPane({ onSelectTerminal, onTerminalContextMenu });
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit terminal" }));
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /Original label/ }), { clientX: 120, clientY: 44 });
 
-    expect(screen.getByRole("dialog").textContent).toContain("Edit Terminal");
-    expect(screen.getByLabelText("Startup command")).toBeTruthy();
-    expect(screen.getByText("Open with")).toBeTruthy();
+    expect(onTerminalContextMenu).toHaveBeenCalledWith(terminal, { x: 120, y: 44 });
+    expect(onSelectTerminal).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Edit terminal" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Close Original label/ })).toBeNull();
   });
 
   it("opens first-run launcher setup with File Explorer selected", () => {
@@ -266,9 +269,9 @@ describe("TerminalPane", () => {
         onNewTerminal={vi.fn()}
         onSplit={vi.fn()}
         onDeletePane={onDeletePane}
-        onRemoveTerminal={vi.fn()}
         onRenameTerminal={vi.fn()}
-        onEditTerminal={vi.fn()}
+        terminalContextTargetId={null}
+        onTerminalContextMenu={vi.fn()}
         onOpenLauncherSettings={vi.fn()}
         onTabDragStart={vi.fn()}
         onTabDragEnd={vi.fn()}
@@ -277,7 +280,8 @@ describe("TerminalPane", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete pane" }));
+    fireEvent.contextMenu(screen.getByRole("tablist", { name: "Terminal tabs" }), { clientX: 400, clientY: 40 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete Pane" }));
     expect(screen.getByText("1 saved terminal will be deleted.")).toBeTruthy();
     expect(screen.getByText("0 running processes will be terminated.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Delete Pane" }));
@@ -298,9 +302,9 @@ describe("TerminalPane", () => {
         onNewTerminal={vi.fn()}
         onSplit={vi.fn()}
         onDeletePane={vi.fn()}
-        onRemoveTerminal={vi.fn()}
         onRenameTerminal={vi.fn()}
-        onEditTerminal={vi.fn()}
+        terminalContextTargetId={null}
+        onTerminalContextMenu={vi.fn()}
         onOpenLauncherSettings={vi.fn()}
         onTabDragStart={vi.fn()}
         onTabDragEnd={vi.fn()}
@@ -309,7 +313,8 @@ describe("TerminalPane", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete pane" }));
+    fireEvent.contextMenu(screen.getByRole("tablist", { name: "Terminal tabs" }), { clientX: 400, clientY: 40 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete Pane" }));
     expect(screen.getByText("Wait for terminal activity to settle.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Delete Pane" }).hasAttribute("disabled")).toBe(true);
   });
@@ -329,9 +334,9 @@ describe("TerminalPane", () => {
         onNewTerminal={vi.fn()}
         onSplit={vi.fn()}
         onDeletePane={vi.fn()}
-        onRemoveTerminal={vi.fn()}
         onRenameTerminal={vi.fn()}
-        onEditTerminal={vi.fn()}
+        terminalContextTargetId={null}
+        onTerminalContextMenu={vi.fn()}
         onOpenLauncherSettings={vi.fn()}
         onTabDragStart={onTabDragStart}
         onTabDragEnd={vi.fn()}
@@ -366,9 +371,9 @@ describe("TerminalPane", () => {
         onNewTerminal={vi.fn()}
         onSplit={vi.fn()}
         onDeletePane={vi.fn()}
-        onRemoveTerminal={vi.fn()}
         onRenameTerminal={vi.fn()}
-        onEditTerminal={vi.fn()}
+        terminalContextTargetId={null}
+        onTerminalContextMenu={vi.fn()}
         onOpenLauncherSettings={vi.fn()}
         onTabDragStart={vi.fn()}
         onTabDragEnd={vi.fn()}
@@ -393,7 +398,7 @@ describe("TerminalPane", () => {
   });
 });
 
-function renderPane() {
+function renderPane(overrides: Partial<Parameters<typeof TerminalPane>[0]> = {}) {
   return render(
     <TerminalPane
       pane={pane}
@@ -405,14 +410,15 @@ function renderPane() {
       onNewTerminal={vi.fn()}
       onSplit={vi.fn()}
       onDeletePane={vi.fn()}
-      onRemoveTerminal={vi.fn()}
       onRenameTerminal={vi.fn()}
-      onEditTerminal={vi.fn()}
+      terminalContextTargetId={null}
+      onTerminalContextMenu={vi.fn()}
       onOpenLauncherSettings={vi.fn()}
       onTabDragStart={vi.fn()}
       onTabDragEnd={vi.fn()}
       onTabDragOver={vi.fn()}
       onTabDrop={vi.fn()}
+      {...overrides}
     />,
   );
 }

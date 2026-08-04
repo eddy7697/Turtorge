@@ -1,7 +1,7 @@
 # Turtorge Development History
 
-Last updated: 2026-08-04
-Current stage: Windows external launcher profiles, the full terminal editor, and persistent TUI rendering across terminal/workspace switches are implemented and verified; date-stamped standalone builds prevent active or prior releases from being overwritten
+Last updated: 2026-08-05
+Current stage: Context-menu-driven terminal and workspace actions, force restart, external launcher profiles, the full terminal editor, and persistent TUI rendering across terminal/workspace switches are implemented and verified; date-stamped standalone builds prevent active or prior releases from being overwritten
 
 This document preserves the product and engineering context of the first Turtorge implementation cycle so future work can continue without reconstructing decisions from chat history.
 
@@ -64,6 +64,10 @@ The product direction was stress-tested with the user before implementation. The
 - Externally launched file managers and editors are detached from Turtorge: they are not treated as terminal processes, counted in running badges, or terminated on application exit.
 - A future macOS implementation should give Finder the same built-in file-manager role that File Explorer has on Windows.
 - Edit Terminal now owns the full terminal definition. Label and launcher changes apply immediately; shell, working directory, startup command, environment, and auto-start changes apply on the next start. A running terminal receives an explicit Restart Now or Later choice when process configuration changes. Tab double-click remains the quick-rename path.
+- Terminal tabs and sidebar terminal entries use the same custom context menu for launcher access, start or confirmed force restart, rename, full editing, and confirmed deletion. Right-clicking does not change the active workspace or terminal; actions target the item that opened the menu.
+- The visible tab-close, pane-edit, and pane-delete buttons are removed. The high-frequency external-launcher button remains visible, while pane creation, splitting, and deletion move to the pane action-area context menu; native xterm right-click behavior remains untouched.
+- Workspace context menus provide New Terminal and Rename Workspace. Creating a terminal from an inactive workspace first activates that workspace and inserts the terminal into its first pane. Workspace names are trimmed, limited to 80 characters, and may duplicate existing names.
+- Context menus are theme-aware, keyboard accessible through Shift+F10 or the Menu key, and use a 248 px width with 30 px single-line rows. Empty-pane deletion is immediate, non-empty pane deletion is confirmed, and the final pane remains protected.
 
 ## 3. Design phase
 
@@ -82,6 +86,8 @@ The layout-management follow-up was also explored in Superdesign. The approved d
 The workspace-terminal navigation and overflow follow-up was finalized in Superdesign draft `0180969e-f94e-4e29-ad07-1fd2841d2463`. It preserves the existing Pinned/Recent structure and separates the disclosure chevron, workspace folder, and row-level pin icon.
 
 The external-launcher and full terminal-edit follow-up was explored through the baseline draft `d3a4ace0-5722-4609-a67d-4c352fef56fd` and approved launcher setup, settings, terminal editor, and profile editor drafts `5f2561b1-bee8-4e55-8a90-861086289970`, `6e9311e1-6b5b-4fbd-91b6-d96e019da74e`, `b9cc79bc-6d8a-4d00-b271-a716fd94389f`, and `5eb2e6ef-73ae-4b5e-bc0d-beabf1b03f3a`.
+
+The context-menu interaction follow-up was explored from baseline draft `fbfc8c65-aa1a-47be-91c2-473af2ea9010` and finalized in approved draft `7b3de1c6-107c-4b6d-b7c9-6a93e4220df5`. Its 248 px menu width keeps destructive labels on one line while preserving the compact 30 px row rhythm.
 
 The source logo was not altered. `images/app-icon.png` and the Tauri platform icons were generated as deterministic transparent crops of the supplied artwork.
 
@@ -113,6 +119,9 @@ The source logo was not altered. `images/app-icon.png` and the Tauri platform ic
 - Shell, Claude Code, Codex, and custom terminal profiles
 - Environment-variable editor and plaintext warning
 - Multi-line paste and terminal-close safeguards
+- Shared custom context menus for terminal tabs, sidebar terminals, workspaces, and pane action areas, with viewport clamping, disabled-state explanations, keyboard navigation, and Escape focus restoration
+- Context-targeted rename and full editor flows, confirmed terminal deletion, and confirmed force restart through a freshly attached PTY
+- Workspace rename dialog and context-targeted New Terminal flow for active or inactive workspaces
 
 ### Rust and Tauri
 
@@ -217,6 +226,16 @@ Resolution:
 - Build the frontend production assets first.
 - Produce standalone Windows executables through `tauri build --no-bundle`, not bare Cargo.
 - Verify the executable with the development server stopped and confirm that the embedded Turtorge UI loads.
+
+### A clean parallel Cargo build may encounter a transient silent MSVC linker failure
+
+A date-stamped clean build once failed while linking the `serde_core` build script. Cargo recorded `link.exe` exit code 1 without linker diagnostics and suggested repairing Visual Studio, but VS 2022 reported a complete MSVC x64 workload and Windows SDK, and an independent Rust link smoke test succeeded.
+
+Resolution:
+
+- Do not attribute this summary error to `serde_core` itself.
+- Confirm the MSVC workload, Windows SDK, disk space, and a minimal Rust link before repairing Visual Studio.
+- Retry the same isolated target with `CARGO_BUILD_JOBS=1`; the complete Tauri release subsequently built successfully, confirming the original failure was transient rather than a missing toolchain component.
 
 ### Tauri file-drop handling blocks frontend tab dragging on Windows
 
@@ -381,6 +400,13 @@ The persistent TUI-rendering follow-up additionally passed:
 - Rust Clippy with `-D warnings`
 - Tauri CLI `--no-bundle` production build at `artifacts/2026-08-04_23-12-18_596/release/turtorge.exe`, SHA-256 `383A6AC5AE63867F29E75542AFC1A7F52DEC8223EC6A659131F3B62BBF0DF10B`
 - Native Claude Code and k9s switch-away/switch-back acceptance remains pending because interactive terminal applications are not automated
+
+The context-menu interaction follow-up additionally passed:
+
+- Frontend Vitest suite: 42/42 tests, including menu keyboard navigation and focus restoration, terminal force restart, confirmed deletion, and updated pane/sidebar interaction coverage
+- TypeScript application compilation and Vite production build
+- Browser QA at 1280×720 for terminal, workspace, and pane menus; the menu measured 248 px wide with 30 px rows, `Delete Terminal` remained on one line, the right edge stayed 6 px inside the viewport, xterm right-click remained native, and the console contained no warnings or errors
+- Tauri CLI `--no-bundle` production build at `artifacts/2026-08-05_00-41-03_056/release/turtorge.exe`, recovered from one transient silent MSVC linker failure by retrying the same isolated target with one Cargo job; SHA-256 `C511FD412791A214412FBEF3CEDDA379D8B6157D9957F3278ED533A4E206AB4F`
 
 The production frontend currently emits a non-blocking warning that the main JavaScript chunk is larger than 500 kB. Code splitting is a future optimization, not an MVP blocker.
 

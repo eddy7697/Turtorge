@@ -1,10 +1,10 @@
-import { AlertCircle, AlertTriangle, Columns2, FolderOpen, LoaderCircle, Pencil, Play, Plus, RotateCw, Rows2, Settings2, Trash2, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, Columns2, FolderOpen, LoaderCircle, Play, Plus, RotateCw, Rows2, Settings2, Trash2, X } from "lucide-react";
 import { Fragment, useEffect, useRef, useState, type DragEvent as ReactDragEvent, type FormEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { closeTerminal, openLauncher } from "../../lib/api";
 import { useAppStore } from "../../stores/appStore";
 import type { PaneNode, SplitDirection, TerminalDefinition, Workspace } from "../../types";
-import { EditTerminalDialog } from "../dialogs/EditTerminalDialog";
 import { LauncherSetupDialog } from "../dialogs/LauncherSetupDialog";
+import { ContextMenu, contextMenuPoint, type ContextMenuPoint } from "../ui/ContextMenu";
 import { LauncherLogo } from "../ui/LauncherLogo";
 import { Modal } from "../ui/Modal";
 import { XtermView } from "./XtermView";
@@ -21,9 +21,9 @@ export function TerminalPane({
   onNewTerminal,
   onSplit,
   onDeletePane,
-  onRemoveTerminal,
   onRenameTerminal,
-  onEditTerminal,
+  terminalContextTargetId,
+  onTerminalContextMenu,
   onOpenLauncherSettings,
   onTabDragStart,
   onTabDragEnd,
@@ -41,9 +41,9 @@ export function TerminalPane({
   onNewTerminal: (paneId: string) => void;
   onSplit: (paneId: string, direction: SplitDirection) => void;
   onDeletePane: (paneId: string) => Promise<void>;
-  onRemoveTerminal: (terminalId: string) => Promise<void>;
   onRenameTerminal: (terminalId: string, name: string) => Promise<void>;
-  onEditTerminal: (definition: TerminalDefinition) => Promise<void>;
+  terminalContextTargetId: string | null;
+  onTerminalContextMenu: (definition: TerminalDefinition, point: ContextMenuPoint) => void;
   onOpenLauncherSettings: () => void;
   onTabDragStart: (paneId: string, terminalId: string, event: ReactDragEvent<HTMLButtonElement>) => void;
   onTabDragEnd: () => void;
@@ -56,18 +56,11 @@ export function TerminalPane({
   const pendingConnections = useAppStore((state) => state.pendingConnections);
   const settings = useAppStore((state) => state.settings);
   const launcherProfiles = useAppStore((state) => state.launcherProfiles);
-  const windowsShells = useAppStore((state) => state.windowsShells);
-  const wslDistributions = useAppStore((state) => state.wslDistributions);
   const updateSettings = useAppStore((state) => state.updateSettings);
   const requestStart = useAppStore((state) => state.requestTerminalStart);
   const removeRuntime = useAppStore((state) => state.removeRuntime);
-  const suppressConfirm = useAppStore((state) => state.suppressTerminalCloseConfirm);
-  const suppressCloseConfirmForSession = useAppStore((state) => state.suppressCloseConfirmForSession);
   const tabStripRef = useRef<HTMLDivElement>(null);
-  const [closing, setClosing] = useState<TerminalDefinition | null>(null);
-  const [suppressChecked, setSuppressChecked] = useState(false);
   const [renaming, setRenaming] = useState<TerminalDefinition | null>(null);
-  const [editing, setEditing] = useState<TerminalDefinition | null>(null);
   const [launcherSetup, setLauncherSetup] = useState(false);
   const [launcherPending, setLauncherPending] = useState(false);
   const [launcherError, setLauncherError] = useState("");
@@ -77,6 +70,7 @@ export function TerminalPane({
   const [deletingPane, setDeletingPane] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [deleteSaving, setDeleteSaving] = useState(false);
+  const [paneMenuPoint, setPaneMenuPoint] = useState<ContextMenuPoint | null>(null);
 
   const definitions = pane.terminalIds
     .map((id) => workspace.terminals.find((terminal) => terminal.id === id))
@@ -97,24 +91,6 @@ export function TerminalPane({
       .find((tab) => tab.dataset.terminalId === active?.id);
     activeTab?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [active?.id]);
-
-  const requestClose = async (definition: TerminalDefinition) => {
-    const current = runtimes[definition.id];
-    if (current && ["starting", "running", "stopping"].includes(current.status) && !suppressConfirm) {
-      setClosing(definition);
-      return;
-    }
-    await finishClose(definition);
-  };
-
-  const finishClose = async (definition: TerminalDefinition) => {
-    const current = useAppStore.getState().runtimes[definition.id];
-    if (current) await closeTerminal(current.id);
-    removeRuntime(definition.id);
-    await onRemoveTerminal(definition.id);
-    if (suppressChecked) suppressCloseConfirmForSession();
-    setClosing(null);
-  };
 
   const restart = async () => {
     if (!active) return;
@@ -251,7 +227,16 @@ export function TerminalPane({
 
   return (
     <section className={`terminal-pane ${runtime?.status === "running" ? "running" : ""} ${dropTarget ? "drop-target" : ""}`}>
-      <div className="terminal-tabs" role="tablist" aria-label="Terminal tabs">
+      <div
+        className="terminal-tabs"
+        role="tablist"
+        aria-label="Terminal tabs"
+        onContextMenu={(event) => {
+          if ((event.target as HTMLElement).closest(".terminal-tab")) return;
+          event.preventDefault();
+          setPaneMenuPoint(contextMenuPoint(event));
+        }}
+      >
         <div ref={tabStripRef} className="terminal-tab-strip" onWheel={scrollTabsWithWheel} onDragOver={dragOverTabs} onDrop={dropOnTabs}>
           {definitions.map((definition, definitionIndex) => {
             const itemRuntime = runtimes[definition.id];
@@ -269,9 +254,15 @@ export function TerminalPane({
                   data-terminal-id={definition.id}
                   draggable
                   aria-selected={isActive}
-                  className={`terminal-tab ${isActive ? "active" : ""} ${isDragging ? "dragging" : ""}`}
+                  className={`terminal-tab ${isActive ? "active" : ""} ${isDragging ? "dragging" : ""} ${terminalContextTargetId === definition.id ? "context-target" : ""}`}
                   onClick={() => onSelectTerminal(pane.id, definition.id)}
                   onDoubleClick={() => openRename(definition)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setPaneMenuPoint(null);
+                    onTerminalContextMenu(definition, contextMenuPoint(event));
+                  }}
                   onDragStart={(event) => {
                     if ((event.target as HTMLElement).closest(".tab-close")) {
                       event.preventDefault();
@@ -285,7 +276,6 @@ export function TerminalPane({
                   <span className={`runtime-dot ${itemRuntime?.status ?? ((pendingConnections[definition.id] ?? 0) > 0 ? "starting" : "idle")}`} />
                   <span>{definition.name}</span>
                   <span className="tab-shell">{definition.shellProfile.shell?.split("/").pop() ?? definition.shellProfile.version?.split(".")[0] ?? "PS"}</span>
-                  <span className="tab-close" role="button" draggable={false} aria-label={`Close ${definition.name}`} onPointerDown={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); void requestClose(definition); }}><X size={12} /></span>
                 </button>
               </Fragment>
             );
@@ -297,9 +287,6 @@ export function TerminalPane({
           <button onClick={() => onSplit(pane.id, "horizontal")} aria-label="Split right" title="Split right"><Columns2 size={13} /></button>
           <button onClick={() => onSplit(pane.id, "vertical")} aria-label="Split down" title="Split down"><Rows2 size={13} /></button>
           <button className="launcher-pane-action" disabled={!active || launcherPending} onClick={requestLauncher} aria-label={activeLauncher ? `Open working directory in ${activeLauncher.profile.name}` : "Open working directory"} title={activeLauncher ? `Open in ${activeLauncher.profile.name}` : "Choose how to open this working directory"}>{launcherPending ? <LoaderCircle className="spin" size={13} /> : activeLauncher ? <LauncherLogo icon={activeLauncher.profile.icon} accent={activeLauncher.profile.accent} size={14} /> : <FolderOpen size={13} />}</button>
-          <button disabled={!active} onClick={() => active && setEditing(active)} aria-label="Edit terminal" title="Edit terminal"><Pencil size={13} /></button>
-          <span className="pane-action-divider" aria-hidden="true" />
-          <button className="delete-pane-action" disabled={!canDeletePane} onClick={requestDeletePane} aria-label="Delete pane" title={canDeletePane ? "Delete pane" : "The last pane cannot be deleted"}><Trash2 size={13} /></button>
         </div>
       </div>
 
@@ -337,9 +324,14 @@ export function TerminalPane({
         )}
       </div>
 
-      {closing && <Modal title={`Close “${closing.name}”?`} description="This terminal is still running. Closing it will terminate the process." onClose={() => setClosing(null)} width="small" footer={<><button className="secondary-button" onClick={() => setClosing(null)}>Cancel</button><button className="danger-button" onClick={() => void finishClose(closing)}>Close Terminal</button></>}><label className="checkbox-field"><input type="checkbox" checked={suppressChecked} onChange={(event) => setSuppressChecked(event.target.checked)} /><span><strong>Do not ask again for this session</strong><small>This resets when Turtorge exits.</small></span></label></Modal>}
+      {paneMenuPoint && <ContextMenu point={paneMenuPoint} label="Pane actions" onClose={() => setPaneMenuPoint(null)} entries={[
+        { type: "item", key: "new-terminal", label: "New Terminal", icon: <Plus size={14} />, onSelect: () => onNewTerminal(pane.id) },
+        { type: "item", key: "split-right", label: "Split Right", icon: <Columns2 size={14} />, onSelect: () => onSplit(pane.id, "horizontal") },
+        { type: "item", key: "split-down", label: "Split Down", icon: <Rows2 size={14} />, onSelect: () => onSplit(pane.id, "vertical") },
+        { type: "separator", key: "delete-separator" },
+        { type: "item", key: "delete-pane", label: "Delete Pane", icon: <Trash2 size={14} />, danger: true, disabled: !canDeletePane, disabledReason: "Last pane", onSelect: requestDeletePane },
+      ]} />}
       {renaming && <Modal title="Rename Terminal" description="The new label is saved with this workspace." onClose={() => !renameSaving && setRenaming(null)} width="small" footer={<><button className="secondary-button" onClick={() => setRenaming(null)} disabled={renameSaving}>Cancel</button><button className="primary-button" type="submit" form="rename-terminal-form" disabled={renameSaving}>Rename</button></>}><form id="rename-terminal-form" onSubmit={finishRename}><label className="field"><span>Terminal name</span><input autoFocus maxLength={80} value={renameValue} onChange={(event) => setRenameValue(event.target.value)} /></label>{renameError && <div className="form-error rename-error">{renameError}</div>}</form></Modal>}
-      {editing && <EditTerminalDialog definition={editing} workspace={workspace} windowsShells={windowsShells} wslDistributions={wslDistributions} launcherProfiles={launcherProfiles} globalDefaultLauncherId={settings.defaultLauncherProfileId} running={Boolean(runtime && ["starting", "running"].includes(runtime.status))} onSave={onEditTerminal} onRestart={restart} onClose={() => setEditing(null)} />}
       {launcherSetup && active && <LauncherSetupDialog launcherProfiles={launcherProfiles} path={active.workingDirectory.value} onClose={() => setLauncherSetup(false)} onManage={() => { setLauncherSetup(false); onOpenLauncherSettings(); }} onSaveAndOpen={async (profileId) => { await updateSettings({ ...settings, defaultLauncherProfileId: profileId }); await launch(profileId); }} />}
       {deletingPane && <Modal title="Delete Pane?" description="This permanently removes every saved terminal in the pane." onClose={() => !deleteSaving && setDeletingPane(false)} width="small" footer={<><button className="secondary-button" onClick={() => setDeletingPane(false)} disabled={deleteSaving}>Cancel</button><button className="danger-button" onClick={() => void finishDeletePane()} disabled={deleteSaving || transitioning}>Delete Pane</button></>}><div className="pane-delete-summary"><AlertTriangle size={16} /><span><strong>{definitions.length} saved {definitions.length === 1 ? "terminal" : "terminals"} will be deleted.</strong><small>{runningCount} running {runningCount === 1 ? "process" : "processes"} will be terminated.</small></span></div><div className="pane-delete-list">{definitions.map((definition) => { const itemRuntime = runtimes[definition.id]; const status = (pendingConnections[definition.id] ?? 0) > 0 ? "starting" : itemRuntime?.status ?? "not running"; return <div key={definition.id}><span><i className={`runtime-dot ${status.replace(" ", "-")}`} />{definition.name}</span><small>{status}</small></div>; })}</div>{transitioning && <div className="form-status pane-delete-wait"><RotateCw className="spin" size={14} /><span><strong>Wait for terminal activity to settle.</strong><small>Try again after every terminal finishes starting or stopping.</small></span></div>}{deleteError && <div className="form-error">{deleteError}</div>}</Modal>}
     </section>

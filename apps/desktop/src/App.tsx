@@ -1,17 +1,20 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { FolderOpen, Plus } from "lucide-react";
+import { FolderOpen, Pencil, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ThemeProvider } from "./app/ThemeProvider";
 import { ConfirmQuitDialog } from "./components/dialogs/ConfirmQuitDialog";
 import { CreateWorkspaceDialog } from "./components/dialogs/CreateWorkspaceDialog";
 import { NewTerminalDialog } from "./components/dialogs/NewTerminalDialog";
 import { QuickOpenDialog } from "./components/dialogs/QuickOpenDialog";
+import { RenameWorkspaceDialog } from "./components/dialogs/RenameWorkspaceDialog";
 import { SettingsDialog } from "./components/dialogs/SettingsDialog";
 import { StatusBar } from "./components/shell/StatusBar";
 import { TitleBar } from "./components/shell/TitleBar";
 import { WorkspaceHeader } from "./components/shell/WorkspaceHeader";
 import { WorkspaceSidebar } from "./components/shell/WorkspaceSidebar";
 import { TerminalWorkspace } from "./components/terminals/TerminalWorkspace";
+import { TerminalActions, type TerminalActionRequest } from "./components/terminals/TerminalActions";
+import { ContextMenu, type ContextMenuPoint } from "./components/ui/ContextMenu";
 import { closeTerminal, isTauri, startTerminal, terminateAllTerminals } from "./lib/api";
 import {
   addTerminalToPane,
@@ -60,7 +63,10 @@ function TurtorgeApp() {
   const requestTerminalStart = useAppStore((state) => state.requestTerminalStart);
   const removeRuntime = useAppStore((state) => state.removeRuntime);
   const [dialog, setDialog] = useState<DialogName>(null);
-  const [targetPaneId, setTargetPaneId] = useState<string | null>(null);
+  const [newTerminalTarget, setNewTerminalTarget] = useState<{ workspaceId: string; paneId: string } | null>(null);
+  const [terminalActionRequest, setTerminalActionRequest] = useState<TerminalActionRequest | null>(null);
+  const [workspaceMenu, setWorkspaceMenu] = useState<{ workspace: Workspace; point: ContextMenuPoint } | null>(null);
+  const [renamingWorkspace, setRenamingWorkspace] = useState<Workspace | null>(null);
   const [layoutError, setLayoutError] = useState<string | null>(null);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState<{ terminalId: string; sequence: number } | null>(null);
   const terminalFocusSequence = useRef(0);
@@ -89,7 +95,7 @@ function TurtorgeApp() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey && event.key.toLowerCase() === "b") { event.preventDefault(); toggleSidebar(); }
       if (event.ctrlKey && event.key.toLowerCase() === "p") { event.preventDefault(); setDialog("quickOpen"); }
-      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "t") { event.preventDefault(); if (workspace) { setTargetPaneId(firstPaneId(workspace.layout)); setDialog("newTerminal"); } }
+      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "t") { event.preventDefault(); if (workspace) { setNewTerminalTarget({ workspaceId: workspace.id, paneId: firstPaneId(workspace.layout) }); setDialog("newTerminal"); } }
       if (event.ctrlKey && event.key === ",") { event.preventDefault(); setDialog("settings"); }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -127,15 +133,16 @@ function TurtorgeApp() {
       throw reason;
     }
   };
-  const openNewTerminal = (paneId?: string) => {
-    if (!workspace) return;
-    setTargetPaneId(paneId ?? firstPaneId(workspace.layout));
+  const openNewTerminal = (targetWorkspace: Workspace | undefined, paneId?: string) => {
+    if (!targetWorkspace) return;
+    setNewTerminalTarget({ workspaceId: targetWorkspace.id, paneId: paneId ?? firstPaneId(targetWorkspace.layout) });
     setDialog("newTerminal");
   };
   const createTerminal = async (definition: TerminalDefinition) => {
-    if (!workspace) return;
-    const paneId = targetPaneId ?? firstPaneId(workspace.layout);
-    await persist({ ...workspace, terminals: [...workspace.terminals, definition], layout: addTerminalToPane(workspace.layout, paneId, definition.id) });
+    const targetWorkspace = useAppStore.getState().workspaces.find((item) => item.id === newTerminalTarget?.workspaceId);
+    if (!targetWorkspace) return;
+    const paneId = newTerminalTarget?.paneId ?? firstPaneId(targetWorkspace.layout);
+    await persist({ ...targetWorkspace, terminals: [...targetWorkspace.terminals, definition], layout: addTerminalToPane(targetWorkspace.layout, paneId, definition.id) });
     requestTerminalStart(definition.id);
   };
   const selectTerminal = (targetWorkspace: Workspace, paneId: string, terminalId: string) => void persistLayout({
@@ -225,6 +232,16 @@ function TurtorgeApp() {
       ),
     });
   };
+  const renameWorkspace = async (targetWorkspace: Workspace, name: string) => {
+    const normalized = name.trim();
+    if (!normalized) return;
+    await persist({ ...targetWorkspace, name: normalized });
+  };
+  const openWorkspaceTerminalDialog = async (targetWorkspace: Workspace) => {
+    setWorkspaceMenu(null);
+    if (useAppStore.getState().activeWorkspaceId !== targetWorkspace.id) await selectWorkspace(targetWorkspace.id);
+    openNewTerminal(targetWorkspace);
+  };
   const createWorkspace = async (created: Workspace) => {
     await saveWorkspace(created);
     await selectWorkspace(created.id);
@@ -254,16 +271,18 @@ function TurtorgeApp() {
     const status = runtimes[terminal.id]?.status;
     return status === "running" || status === "starting";
   })).length;
+  const newTerminalWorkspace = workspaces.find((item) => item.id === newTerminalTarget?.workspaceId);
+  const terminalContextTargetId = terminalActionRequest?.kind === "menu" ? terminalActionRequest.target.definition.id : null;
 
   if (!initialized || loading) return <div className="boot-screen"><img src="/logo.png" alt="Turtorge" /><span className="loading-line" /><div className="boot-status" role="status" aria-live="polite"><strong>Preparing your terminal environments…</strong><small>Detecting PowerShell and WSL quietly in the background.</small></div></div>;
 
   return (
     <div className="app-shell">
-      <TitleBar sidebarCollapsed={sidebarCollapsed} onToggleSidebar={toggleSidebar} onQuickOpen={() => setDialog("quickOpen")} onNewTerminal={() => openNewTerminal()} onSettings={() => setDialog("settings")} onRequestQuit={requestQuit} />
+      <TitleBar sidebarCollapsed={sidebarCollapsed} onToggleSidebar={toggleSidebar} onQuickOpen={() => setDialog("quickOpen")} onNewTerminal={() => openNewTerminal(workspace)} onSettings={() => setDialog("settings")} onRequestQuit={requestQuit} />
       <div className="app-body">
-        <WorkspaceSidebar workspaces={workspaces} activeWorkspaceId={workspace?.id ?? null} runtimes={runtimes} errors={errors} pendingConnections={pendingConnections} collapsed={sidebarCollapsed} onSelect={(id) => void selectWorkspace(id)} onSelectTerminal={(workspaceId, paneId, terminalId) => void selectSidebarTerminal(workspaceId, paneId, terminalId).catch(() => undefined)} onCreate={() => setDialog("createWorkspace")} onSettings={() => setDialog("settings")} />
+        <WorkspaceSidebar workspaces={workspaces} activeWorkspaceId={workspace?.id ?? null} runtimes={runtimes} errors={errors} pendingConnections={pendingConnections} collapsed={sidebarCollapsed} onSelect={(id) => void selectWorkspace(id)} onSelectTerminal={(workspaceId, paneId, terminalId) => void selectSidebarTerminal(workspaceId, paneId, terminalId).catch(() => undefined)} workspaceContextTargetId={workspaceMenu?.workspace.id ?? null} terminalContextTargetId={terminalContextTargetId} onWorkspaceContextMenu={(targetWorkspace, point) => { setTerminalActionRequest(null); setWorkspaceMenu({ workspace: targetWorkspace, point }); }} onTerminalContextMenu={(targetWorkspace, definition, point) => { setWorkspaceMenu(null); setTerminalActionRequest({ kind: "menu", target: { workspace: targetWorkspace, definition }, point }); }} onCreate={() => setDialog("createWorkspace")} onSettings={() => setDialog("settings")} />
         <main className="main-content">
-          {workspace ? <><WorkspaceHeader workspace={workspace} runtimes={runtimes} onNewTerminal={() => openNewTerminal()} /><div className="workspace-terminal-deck">{workspaces.map((item) => {
+          {workspace ? <><WorkspaceHeader workspace={workspace} runtimes={runtimes} onNewTerminal={() => openNewTerminal(workspace)} /><div className="workspace-terminal-deck">{workspaces.map((item) => {
             const isActive = item.id === workspace.id;
             return <div key={item.id} className={`workspace-terminal-layer ${isActive ? "active" : "inactive"}`} aria-hidden={!isActive}>
               <TerminalWorkspace
@@ -273,14 +292,14 @@ function TurtorgeApp() {
                 terminalFocusRequest={isActive ? terminalFocusRequest : null}
                 onDismissLayoutError={() => setLayoutError(null)}
                 onSelectTerminal={(paneId, terminalId) => selectTerminal(item, paneId, terminalId)}
-                onNewTerminal={openNewTerminal}
+                onNewTerminal={(paneId) => openNewTerminal(item, paneId)}
                 onSplit={(paneId, direction) => split(item, paneId, direction)}
                 onRatioChange={(splitId, ratio) => ratioChange(item, splitId, ratio)}
                 onMoveTerminal={(sourcePaneId, targetPaneId, terminalId, targetIndex) => moveTerminalTab(item, sourcePaneId, targetPaneId, terminalId, targetIndex)}
                 onDeletePane={(paneId) => deletePane(item, paneId)}
-                onRemoveTerminal={(terminalId) => removeTerminal(item, terminalId)}
                 onRenameTerminal={(terminalId, name) => renameTerminal(item, terminalId, name)}
-                onEditTerminal={(definition) => editTerminal(item, definition)}
+                terminalContextTargetId={terminalActionRequest?.kind === "menu" && terminalActionRequest.target.workspace.id === item.id ? terminalContextTargetId : null}
+                onTerminalContextMenu={(definition, point) => { setWorkspaceMenu(null); setTerminalActionRequest({ kind: "menu", target: { workspace: item, definition }, point }); }}
                 onOpenLauncherSettings={() => setDialog("settings")}
               />
             </div>;
@@ -290,10 +309,17 @@ function TurtorgeApp() {
       <StatusBar workspace={workspace} runtimes={runtimes} />
 
       {dialog === "createWorkspace" && <CreateWorkspaceDialog windowsShells={windowsShells} wslDistributions={wslDistributions} launcherProfiles={launcherProfiles} globalDefaultLauncherId={settings.defaultLauncherProfileId} onClose={() => setDialog(null)} onCreate={createWorkspace} />}
-      {dialog === "newTerminal" && workspace && <NewTerminalDialog workspace={workspace} windowsShells={windowsShells} wslDistributions={wslDistributions} launcherProfiles={launcherProfiles} globalDefaultLauncherId={settings.defaultLauncherProfileId} onClose={() => setDialog(null)} onCreate={createTerminal} />}
+      {dialog === "newTerminal" && newTerminalWorkspace && <NewTerminalDialog workspace={newTerminalWorkspace} windowsShells={windowsShells} wslDistributions={wslDistributions} launcherProfiles={launcherProfiles} globalDefaultLauncherId={settings.defaultLauncherProfileId} onClose={() => { setDialog(null); setNewTerminalTarget(null); }} onCreate={createTerminal} />}
       {dialog === "settings" && <SettingsDialog settings={settings} launcherProfiles={launcherProfiles} workspaces={workspaces} windowsShells={windowsShells} wslDistributions={wslDistributions} onChange={updateSettings} onDeleteProfile={deleteLauncherProfile} onClose={() => setDialog(null)} />}
       {dialog === "quickOpen" && <QuickOpenDialog workspaces={workspaces} onSelect={(id) => void selectWorkspace(id)} onClose={() => setDialog(null)} />}
       {dialog === "quit" && <ConfirmQuitDialog workspaceCount={runningWorkspaceCount} terminalCount={runningCount} onCancel={() => setDialog(null)} onConfirm={() => void finishQuit()} />}
+
+      {workspaceMenu && <ContextMenu point={workspaceMenu.point} label={`${workspaceMenu.workspace.name} workspace actions`} onClose={() => setWorkspaceMenu(null)} entries={[
+        { type: "item", key: "new-terminal", label: "New Terminal", icon: <Plus size={14} />, onSelect: () => void openWorkspaceTerminalDialog(workspaceMenu.workspace).catch(() => undefined) },
+        { type: "item", key: "rename-workspace", label: "Rename Workspace", icon: <Pencil size={14} />, onSelect: () => { setRenamingWorkspace(workspaceMenu.workspace); setWorkspaceMenu(null); } },
+      ]} />}
+      {renamingWorkspace && <RenameWorkspaceDialog workspace={renamingWorkspace} onSave={(name) => renameWorkspace(renamingWorkspace, name)} onClose={() => setRenamingWorkspace(null)} />}
+      <TerminalActions request={terminalActionRequest} onRequestChange={setTerminalActionRequest} onRename={renameTerminal} onEdit={editTerminal} onRemove={removeTerminal} onOpenLauncherSettings={() => setDialog("settings")} />
     </div>
   );
 }

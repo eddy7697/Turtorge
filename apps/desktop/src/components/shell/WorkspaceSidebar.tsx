@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronRight, Folder, FolderGit2, Pin, Plus, Settings } from "lucide-react";
 import { useEffect, useState } from "react";
+import { contextMenuPoint, type ContextMenuPoint } from "../ui/ContextMenu";
 import type { LayoutNode, TerminalDefinition, TerminalRuntimeSnapshot, Workspace } from "../../types";
 
 interface WorkspaceSidebarProps {
@@ -11,6 +12,10 @@ interface WorkspaceSidebarProps {
   collapsed: boolean;
   onSelect: (id: string) => void;
   onSelectTerminal: (workspaceId: string, paneId: string, terminalId: string) => void;
+  workspaceContextTargetId: string | null;
+  terminalContextTargetId: string | null;
+  onWorkspaceContextMenu: (workspace: Workspace, point: ContextMenuPoint) => void;
+  onTerminalContextMenu: (workspace: Workspace, definition: TerminalDefinition, point: ContextMenuPoint) => void;
   onCreate: () => void;
   onSettings: () => void;
 }
@@ -32,6 +37,10 @@ export function WorkspaceSidebar({
   collapsed,
   onSelect,
   onSelectTerminal,
+  workspaceContextTargetId,
+  terminalContextTargetId,
+  onWorkspaceContextMenu,
+  onTerminalContextMenu,
   onCreate,
   onSettings,
 }: WorkspaceSidebarProps) {
@@ -87,7 +96,13 @@ export function WorkspaceSidebar({
 
     return (
       <div className="workspace-tree-item" key={workspace.id}>
-        <div className={`workspace-item ${active ? "active" : ""}`}>
+        <div
+          className={`workspace-item ${active ? "active" : ""} ${workspaceContextTargetId === workspace.id ? "context-target" : ""}`}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            onWorkspaceContextMenu(workspace, contextMenuPoint(event));
+          }}
+        >
           <span className="workspace-accent" style={{ background: workspace.color }} />
           {!collapsed && (
             <button
@@ -121,8 +136,13 @@ export function WorkspaceSidebar({
               return (
                 <button
                   key={definition.id}
-                  className={`workspace-terminal-item ${visible ? "visible" : ""}`}
+                  className={`workspace-terminal-item ${visible ? "visible" : ""} ${terminalContextTargetId === definition.id ? "context-target" : ""}`}
                   onClick={() => paneId ? onSelectTerminal(workspace.id, paneId, definition.id) : onSelect(workspace.id)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onTerminalContextMenu(workspace, definition, contextMenuPoint(event));
+                  }}
                   aria-label={`${definition.name}, ${statusLabel}`}
                   title={`${definition.name} — ${statusLabel}`}
                 >

@@ -2,6 +2,7 @@ import { AlertCircle, X } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { LayoutNode, PaneNode, SplitDirection, TerminalDefinition, Workspace } from "../../types";
 import { paneCount } from "../../lib/layout";
+import type { ContextMenuPoint } from "../ui/ContextMenu";
 import { TerminalPane } from "./TerminalPane";
 
 interface TerminalWorkspaceProps {
@@ -16,9 +17,9 @@ interface TerminalWorkspaceProps {
   onRatioChange: (splitId: string, ratio: number) => void;
   onMoveTerminal: (sourcePaneId: string, targetPaneId: string, terminalId: string, targetIndex: number) => Promise<void>;
   onDeletePane: (paneId: string) => Promise<void>;
-  onRemoveTerminal: (terminalId: string) => Promise<void>;
   onRenameTerminal: (terminalId: string, name: string) => Promise<void>;
-  onEditTerminal: (definition: TerminalDefinition) => Promise<void>;
+  terminalContextTargetId: string | null;
+  onTerminalContextMenu: (definition: TerminalDefinition, point: ContextMenuPoint) => void;
   onOpenLauncherSettings: () => void;
 }
 
@@ -99,9 +100,9 @@ function LayoutRenderer({ node, ...props }: { node: LayoutNode } & TerminalWorks
         onNewTerminal={props.onNewTerminal}
         onSplit={props.onSplit}
         onDeletePane={props.onDeletePane}
-        onRemoveTerminal={props.onRemoveTerminal}
         onRenameTerminal={props.onRenameTerminal}
-        onEditTerminal={props.onEditTerminal}
+        terminalContextTargetId={props.terminalContextTargetId}
+        onTerminalContextMenu={props.onTerminalContextMenu}
         onOpenLauncherSettings={props.onOpenLauncherSettings}
         onTabDragStart={props.onTabDragStart}
         onTabDragEnd={props.onTabDragEnd}
