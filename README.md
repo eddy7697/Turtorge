@@ -51,6 +51,16 @@ pnpm dev
 
 The browser preview uses a mock terminal stream. Use `pnpm tauri:dev` to exercise real PowerShell and WSL PTYs.
 
+## Build a standalone release
+
+Run [`build-latest.bat`](build-latest.bat) from File Explorer or a terminal. It synchronizes the locked pnpm dependencies, builds the current source through the Tauri CLI with `--no-bundle`, and writes the standalone executable to a unique date-stamped directory:
+
+```text
+artifacts/YYYY-MM-DD_HH-mm-ss_fff/release/turtorge.exe
+```
+
+Each build uses an isolated Cargo target directory, so it does not replace the standard release or any previously built executable that may still be running.
+
 ## Verify
 
 ```powershell

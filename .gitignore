@@ -5,6 +5,7 @@ dist/
 apps/desktop/dist/
 apps/desktop/node_modules/
 apps/desktop/src-tauri/target/
+artifacts/
 .superdesign/tmp/
 *.log
 *.tsbuildinfo
