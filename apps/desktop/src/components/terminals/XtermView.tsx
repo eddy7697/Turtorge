@@ -41,13 +41,14 @@ const terminalThemes = {
   },
 } as const;
 
-export function XtermView({ workspace, definition, activate, connectionGeneration, focusRequest }: { workspace: Workspace; definition: TerminalDefinition; activate: boolean; connectionGeneration: number; focusRequest?: number }) {
+export function XtermView({ workspace, definition, activate, connectionGeneration, visible, focusRequest }: { workspace: Workspace; definition: TerminalDefinition; activate: boolean; connectionGeneration: number; visible: boolean; focusRequest?: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const resizeTimer = useRef<number | null>(null);
   const runtimeIdRef = useRef<string | null>(null);
   const pendingInputRef = useRef<Uint8Array[]>([]);
+  const visibleRef = useRef(visible);
   const [ready, setReady] = useState(false);
   const theme = useResolvedTheme();
   const setRuntime = useAppStore((state) => state.setRuntime);
@@ -55,6 +56,7 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
   const setTerminalError = useAppStore((state) => state.setTerminalError);
   const beginTerminalConnection = useAppStore((state) => state.beginTerminalConnection);
   const endTerminalConnection = useAppStore((state) => state.endTerminalConnection);
+  visibleRef.current = visible;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -138,10 +140,22 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
   }, [theme]);
 
   useEffect(() => {
-    if (focusRequest === undefined) return;
+    if (!visible || focusRequest === undefined) return;
     const frame = requestAnimationFrame(() => terminalRef.current?.focus());
     return () => cancelAnimationFrame(frame);
-  }, [focusRequest]);
+  }, [focusRequest, visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const frame = requestAnimationFrame(() => {
+      fitRef.current?.fit();
+      const terminal = terminalRef.current;
+      if (!terminal) return;
+      terminal.refresh(0, terminal.rows - 1);
+      terminal.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [visible]);
 
   useEffect(() => {
     if (!ready || !activate) return;
@@ -202,7 +216,7 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
         const pendingInput = pendingInputRef.current.splice(0);
         for (const bytes of pendingInput) void writeTerminal(snapshot.id, bytes);
         void resizeTerminal(snapshot.id, terminalRef.current?.cols ?? snapshot.cols, terminalRef.current?.rows ?? snapshot.rows);
-        terminalRef.current?.focus();
+        if (visibleRef.current) terminalRef.current?.focus();
       })
       .catch((error) => !disposed && setTerminalError(definition.id, String(error?.message ?? error)))
       .finally(() => {

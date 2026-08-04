@@ -6,6 +6,7 @@ import { TerminalPane } from "./TerminalPane";
 
 interface TerminalWorkspaceProps {
   workspace: Workspace;
+  visible: boolean;
   layoutError: string | null;
   terminalFocusRequest: { terminalId: string; sequence: number } | null;
   onDismissLayoutError: () => void;
@@ -89,6 +90,7 @@ function LayoutRenderer({ node, ...props }: { node: LayoutNode } & TerminalWorks
       <TerminalPane
         pane={node as PaneNode}
         workspace={props.workspace}
+        workspaceVisible={props.visible}
         terminalFocusRequest={props.terminalFocusRequest}
         canDeletePane={props.paneTotal > 1}
         dragging={props.dragging}

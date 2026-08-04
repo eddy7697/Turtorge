@@ -21,12 +21,12 @@ const xtermLifecycle = vi.hoisted(() => ({ mount: vi.fn(), unmount: vi.fn() }));
 vi.mock("./XtermView", async () => {
   const { useEffect } = await import("react");
   return {
-    XtermView: ({ workspace }: { workspace: { id: string } }) => {
+    XtermView: ({ definition, visible }: { definition: { id: string }; visible: boolean }) => {
       useEffect(() => {
-        xtermLifecycle.mount(workspace.id);
-        return () => xtermLifecycle.unmount(workspace.id);
+        xtermLifecycle.mount(definition.id);
+        return () => xtermLifecycle.unmount(definition.id);
       }, []);
-      return <div data-testid="xterm-view" />;
+      return <div data-testid="xterm-view" data-terminal-id={definition.id} data-visible={visible} />;
     },
   };
 });
@@ -123,9 +123,11 @@ describe("TerminalPane", () => {
     apiMocks.validatePath.mockResolvedValue(true);
   });
 
-  it("remounts the xterm view when the workspace identity changes", () => {
+  it("keeps every xterm view mounted when the active tab changes", () => {
+    const secondTerminal: TerminalDefinition = { ...terminal, id: "terminal-second", name: "Second" };
+    const twoTerminalWorkspace: Workspace = { ...workspace, terminals: [terminal, secondTerminal] };
+    const twoTerminalPane: PaneNode = { ...pane, terminalIds: [terminal.id, secondTerminal.id] };
     const sharedProps = {
-      pane,
       canDeletePane: false,
       dragging: null,
       dropTarget: null,
@@ -142,13 +144,48 @@ describe("TerminalPane", () => {
       onTabDragOver: vi.fn(),
       onTabDrop: vi.fn(),
     };
-    const { rerender } = render(<TerminalPane {...sharedProps} workspace={workspace} />);
-    expect(xtermLifecycle.mount).toHaveBeenCalledWith("workspace-test");
+    const { container, rerender } = render(<TerminalPane {...sharedProps} pane={twoTerminalPane} workspace={twoTerminalWorkspace} />);
+    expect(xtermLifecycle.mount).toHaveBeenCalledWith(terminal.id);
+    expect(xtermLifecycle.mount).toHaveBeenCalledWith(secondTerminal.id);
+    expect(xtermLifecycle.mount).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(`[data-terminal-view="${terminal.id}"]`)?.classList.contains("active")).toBe(true);
 
-    rerender(<TerminalPane {...sharedProps} workspace={{ ...workspace, id: "workspace-other" }} />);
+    rerender(<TerminalPane {...sharedProps} pane={{ ...twoTerminalPane, activeTerminalId: secondTerminal.id }} workspace={twoTerminalWorkspace} />);
 
-    expect(xtermLifecycle.unmount).toHaveBeenCalledWith("workspace-test");
-    expect(xtermLifecycle.mount).toHaveBeenCalledWith("workspace-other");
+    expect(xtermLifecycle.unmount).not.toHaveBeenCalled();
+    expect(xtermLifecycle.mount).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(`[data-terminal-view="${terminal.id}"]`)?.classList.contains("inactive")).toBe(true);
+    expect(container.querySelector(`[data-terminal-view="${secondTerminal.id}"]`)?.classList.contains("active")).toBe(true);
+  });
+
+  it("keeps xterm views mounted while the workspace is hidden", () => {
+    const sharedProps = {
+      pane,
+      workspace,
+      canDeletePane: false,
+      dragging: null,
+      dropTarget: null,
+      onSelectTerminal: vi.fn(),
+      onNewTerminal: vi.fn(),
+      onSplit: vi.fn(),
+      onDeletePane: vi.fn(),
+      onRemoveTerminal: vi.fn(),
+      onRenameTerminal: vi.fn(),
+      onEditTerminal: vi.fn(),
+      onOpenLauncherSettings: vi.fn(),
+      onTabDragStart: vi.fn(),
+      onTabDragEnd: vi.fn(),
+      onTabDragOver: vi.fn(),
+      onTabDrop: vi.fn(),
+    };
+    const { container, rerender } = render(<TerminalPane {...sharedProps} workspaceVisible />);
+    expect(container.querySelector(`[data-testid="xterm-view"][data-terminal-id="${terminal.id}"]`)?.getAttribute("data-visible")).toBe("true");
+
+    rerender(<TerminalPane {...sharedProps} workspaceVisible={false} />);
+
+    expect(xtermLifecycle.unmount).not.toHaveBeenCalled();
+    expect(xtermLifecycle.mount).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(`[data-testid="xterm-view"][data-terminal-id="${terminal.id}"]`)?.getAttribute("data-visible")).toBe("false");
   });
 
   it("keeps double-click as the quick rename interaction", async () => {

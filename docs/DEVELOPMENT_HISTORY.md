@@ -1,7 +1,7 @@
 # Turtorge Development History
 
-Last updated: 2026-08-01
-Current stage: Windows external launcher profiles and the full terminal editor are implemented and verified in an isolated production build; the active standard standalone release was intentionally not replaced
+Last updated: 2026-08-04
+Current stage: Windows external launcher profiles, the full terminal editor, and persistent TUI rendering across terminal/workspace switches are implemented and verified; date-stamped standalone builds prevent active or prior releases from being overwritten
 
 This document preserves the product and engineering context of the first Turtorge implementation cycle so future work can continue without reconstructing decisions from chat history.
 
@@ -37,6 +37,7 @@ The product direction was stress-tested with the user before implementation. The
 - A previously saved WSL terminal working directory that later disappears falls back to the distribution default user's `~` and prints a visible terminal notice. Newly selected invalid directories still fail validation instead of falling back.
 - Windows, UNC, WSL-mounted, and WSL-native paths are supported through typed path models.
 - Switching workspaces keeps Rust-managed terminal processes alive.
+- Switching terminal tabs or workspaces also keeps each running xterm.js emulator instance mounted. Hidden views retain their dimensions and emulator state; the selected view is fitted, refreshed, and focused when it becomes visible.
 - Quitting Turtorge terminates all managed processes after one confirmation.
 - Initial terminal creation starts immediately but persists `autoStart: false` unless explicitly enabled.
 - Terminal input, output, and scrollback are not written to disk.
@@ -257,6 +258,17 @@ Resolution:
 - Allow Rust detach operations to clear only the matching subscriber.
 - Key xterm.js views by workspace and terminal definition so React does not reuse stale view state across workspaces.
 - Queue live terminal events until the attach snapshot has been replayed, then preserve their original order.
+
+### TUI switching must preserve terminal-emulator state
+
+Claude Code and k9s could render with displaced input or screen regions after switching away from their terminal and back. Resizing the application repaired the display because xterm.js then performed a fit and repaint. The deeper issue was that routine tab and workspace switches disposed the current xterm.js instance and tried to reconstruct a stateful TUI from the Rust byte snapshot. Alternate-screen, cursor, and incremental redraw state should remain in the emulator that received it.
+
+The durable fix is:
+
+- Keep every terminal's xterm.js instance mounted while its definition remains in the layout, including across workspace switches.
+- Hide inactive terminal and workspace layers with CSS visibility while retaining measurable layout dimensions.
+- On reveal, run `FitAddon.fit()`, refresh the complete visible row range, and focus only the newly visible terminal.
+- Keep Rust snapshot replay for genuine attachment and recovery, not as the normal mechanism for switching views.
 - Avoid reconnecting merely because the stored runtime snapshot object changed.
 
 ### External launchers need typed arguments and separate path semantics
@@ -353,6 +365,23 @@ The external-launcher and full terminal-edit follow-up additionally passed:
 - Tauri CLI `--no-bundle` production build succeeded at `target/codex-launcher-verification/release/turtorge.exe`
 - Native acceptance that opens each available external application remains pending because launching user applications was intentionally not included in automated or browser QA
 
+The date-stamped standalone build helper additionally passed:
+
+- Locked pnpm dependency synchronization in a non-interactive invocation
+- Tauri CLI `--no-bundle` production build at `artifacts/2026-08-04_15-56-54_096/release/turtorge.exe`
+- SHA-256 `F5BD1012796F8B94A5D9B657FD41DB705C288B07890AF2E5AA08F80A11559A48`
+- Confirmation that the actively running standard executable retained its prior timestamp and SHA-256
+
+The persistent TUI-rendering follow-up additionally passed:
+
+- Frontend Vitest suite: 37/37 tests, including persistent xterm instances across terminal and workspace switches, reveal-time refresh/focus, and hidden-terminal output handling
+- TypeScript application compilation and Vite production build
+- Rust default suite: 18 passed, 1 real-WSL integration test ignored by default
+- Opt-in real WSL PTY integration test: 1/1 passed
+- Rust Clippy with `-D warnings`
+- Tauri CLI `--no-bundle` production build at `artifacts/2026-08-04_23-12-18_596/release/turtorge.exe`, SHA-256 `383A6AC5AE63867F29E75542AFC1A7F52DEC8223EC6A659131F3B62BBF0DF10B`
+- Native Claude Code and k9s switch-away/switch-back acceptance remains pending because interactive terminal applications are not automated
+
 The production frontend currently emits a non-blocking warning that the main JavaScript chunk is larger than 500 kB. Code splitting is a future optimization, not an MVP blocker.
 
 ## 7. Delivery state
@@ -390,6 +419,10 @@ The 2026-08-01 external-launcher implementation was delivered in staged commits:
 ```
 
 The final verified executable is `target/codex-launcher-verification/release/turtorge.exe`, SHA-256 `BF77E49FF25DC611F588FC535E82008163B0A85FA8A0BB160D414862EF367402`. The standard release executable was intentionally not replaced.
+
+The root `build-latest.bat` script synchronizes locked pnpm dependencies, then builds the current source with the Tauri CLI and `--no-bundle`. Every invocation assigns an isolated `artifacts/YYYY-MM-DD_HH-mm-ss_fff` Cargo target directory, so an active standard release or earlier dated build is never overwritten. The resulting standalone executable is under that directory's `release` folder.
+
+The 2026-08-04 persistent TUI-rendering fix was built at `artifacts/2026-08-04_23-12-18_596/release/turtorge.exe`. Its SHA-256 is `383A6AC5AE63867F29E75542AFC1A7F52DEC8223EC6A659131F3B62BBF0DF10B`; native Claude Code and k9s acceptance remains pending.
 
 ## 8. Deferred scope
 

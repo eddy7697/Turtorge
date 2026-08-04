@@ -12,6 +12,7 @@ import { XtermView } from "./XtermView";
 export function TerminalPane({
   pane,
   workspace,
+  workspaceVisible = true,
   terminalFocusRequest,
   canDeletePane,
   dragging,
@@ -31,6 +32,7 @@ export function TerminalPane({
 }: {
   pane: PaneNode;
   workspace: Workspace;
+  workspaceVisible?: boolean;
   terminalFocusRequest?: { terminalId: string; sequence: number } | null;
   canDeletePane: boolean;
   dragging: { paneId: string; terminalId: string } | null;
@@ -306,7 +308,27 @@ export function TerminalPane({
           <div className="terminal-empty"><p>No terminals in this pane.</p><button className="primary-button" onClick={() => onNewTerminal(pane.id)}><Plus size={14} /> Add Terminal</button></div>
         ) : (
           <>
-            <XtermView key={`${workspace.id}:${active.id}`} workspace={workspace} definition={active} activate={Boolean(runtime) || Boolean(startRequests[active.id])} connectionGeneration={startRequests[active.id] ?? 0} focusRequest={terminalFocusRequest?.terminalId === active.id ? terminalFocusRequest.sequence : undefined} />
+            {definitions.map((definition) => {
+              const isActive = definition.id === active.id;
+              const isVisible = workspaceVisible && isActive;
+              return (
+                <div
+                  key={definition.id}
+                  className={`terminal-view-layer ${isActive ? "active" : "inactive"}`}
+                  data-terminal-view={definition.id}
+                  aria-hidden={!isVisible}
+                >
+                  <XtermView
+                    workspace={workspace}
+                    definition={definition}
+                    activate={Boolean(runtimes[definition.id]) || Boolean(startRequests[definition.id])}
+                    connectionGeneration={startRequests[definition.id] ?? 0}
+                    visible={isVisible}
+                    focusRequest={isVisible && terminalFocusRequest?.terminalId === definition.id ? terminalFocusRequest.sequence : undefined}
+                  />
+                </div>
+              );
+            })}
             {!runtime && !startRequests[active.id] && !error && <div className="terminal-overlay"><Play size={20} /><p><strong>{active.name}</strong> is not running.</p><button className="primary-button" onClick={() => requestStart(active.id)}><Play size={13} /> Start Terminal</button></div>}
             {error && <div className="terminal-overlay error"><AlertCircle size={22} /><p><strong>Unable to start terminal.</strong><span>{error}</span></p><div><button className="secondary-button" onClick={() => requestStart(active.id)}><RotateCw size={13} /> Retry</button></div></div>}
             {runtime?.status === "exited" && <div className="terminal-exit-banner"><span>Process exited with code {runtime.exitCode ?? 0}.</span><button onClick={() => void restart()}><RotateCw size={12} /> Restart</button></div>}

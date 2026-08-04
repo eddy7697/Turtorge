@@ -138,7 +138,10 @@ function TurtorgeApp() {
     await persist({ ...workspace, terminals: [...workspace.terminals, definition], layout: addTerminalToPane(workspace.layout, paneId, definition.id) });
     requestTerminalStart(definition.id);
   };
-  const selectTerminal = (paneId: string, terminalId: string) => workspace && void persistLayout({ ...workspace, layout: setActiveTerminal(workspace.layout, paneId, terminalId) }).catch(() => undefined);
+  const selectTerminal = (targetWorkspace: Workspace, paneId: string, terminalId: string) => void persistLayout({
+    ...targetWorkspace,
+    layout: setActiveTerminal(targetWorkspace.layout, paneId, terminalId),
+  }).catch(() => undefined);
   const selectSidebarTerminal = async (workspaceId: string, paneId: string, terminalId: string) => {
     if (useAppStore.getState().activeWorkspaceId !== workspaceId) await selectWorkspace(workspaceId);
     const targetWorkspace = useAppStore.getState().workspaces.find((item) => item.id === workspaceId);
@@ -150,21 +153,26 @@ function TurtorgeApp() {
     terminalFocusSequence.current += 1;
     setTerminalFocusRequest({ terminalId, sequence: terminalFocusSequence.current });
   };
-  const split = (paneId: string, direction: SplitDirection) => workspace && void persistLayout({ ...workspace, layout: splitPane(workspace.layout, paneId, direction) }).catch(() => undefined);
-  const ratioChange = (splitId: string, ratio: number) => workspace && void persistLayout({ ...workspace, layout: updateSplitRatio(workspace.layout, splitId, ratio) }).catch(() => undefined);
-  const moveTerminalTab = async (sourcePaneId: string, targetPaneId: string, terminalId: string, targetIndex: number) => {
-    if (!workspace) return;
+  const split = (targetWorkspace: Workspace, paneId: string, direction: SplitDirection) => void persistLayout({
+    ...targetWorkspace,
+    layout: splitPane(targetWorkspace.layout, paneId, direction),
+  }).catch(() => undefined);
+  const ratioChange = (targetWorkspace: Workspace, splitId: string, ratio: number) => void persistLayout({
+    ...targetWorkspace,
+    layout: updateSplitRatio(targetWorkspace.layout, splitId, ratio),
+  }).catch(() => undefined);
+  const moveTerminalTab = async (targetWorkspace: Workspace, sourcePaneId: string, targetPaneId: string, terminalId: string, targetIndex: number) => {
     await persistLayout({
-      ...workspace,
-      layout: moveTerminal(workspace.layout, sourcePaneId, targetPaneId, terminalId, targetIndex),
+      ...targetWorkspace,
+      layout: moveTerminal(targetWorkspace.layout, sourcePaneId, targetPaneId, terminalId, targetIndex),
     });
   };
-  const deletePane = async (paneId: string) => {
-    if (!workspace || paneCount(workspace.layout) <= 1) return;
-    const pane = findPane(workspace.layout, paneId);
+  const deletePane = async (targetWorkspace: Workspace, paneId: string) => {
+    if (paneCount(targetWorkspace.layout) <= 1) return;
+    const pane = findPane(targetWorkspace.layout, paneId);
     if (!pane) return;
     const definitions = pane.terminalIds
-      .map((terminalId) => workspace.terminals.find((terminal) => terminal.id === terminalId))
+      .map((terminalId) => targetWorkspace.terminals.find((terminal) => terminal.id === terminalId))
       .filter((terminal): terminal is TerminalDefinition => Boolean(terminal));
     const transitioning = definitions.some((definition) => {
       const status = runtimes[definition.id]?.status;
@@ -190,32 +198,29 @@ function TurtorgeApp() {
     }
 
     await persistLayout({
-      ...workspace,
-      terminals: workspace.terminals.filter((terminal) => !pane.terminalIds.includes(terminal.id)),
-      layout: removePaneFromLayout(workspace.layout, paneId),
+      ...targetWorkspace,
+      terminals: targetWorkspace.terminals.filter((terminal) => !pane.terminalIds.includes(terminal.id)),
+      layout: removePaneFromLayout(targetWorkspace.layout, paneId),
     });
     for (const definition of definitions) removeRuntime(definition.id);
   };
-  const removeTerminal = async (terminalId: string) => {
-    if (!workspace) return;
-    await persistLayout({ ...workspace, terminals: workspace.terminals.filter((terminal) => terminal.id !== terminalId), layout: removeTerminalFromLayout(workspace.layout, terminalId) });
+  const removeTerminal = async (targetWorkspace: Workspace, terminalId: string) => {
+    await persistLayout({ ...targetWorkspace, terminals: targetWorkspace.terminals.filter((terminal) => terminal.id !== terminalId), layout: removeTerminalFromLayout(targetWorkspace.layout, terminalId) });
   };
-  const renameTerminal = async (terminalId: string, name: string) => {
-    if (!workspace) return;
+  const renameTerminal = async (targetWorkspace: Workspace, terminalId: string, name: string) => {
     const normalized = name.trim();
     if (!normalized) return;
     await persist({
-      ...workspace,
-      terminals: workspace.terminals.map((terminal) =>
+      ...targetWorkspace,
+      terminals: targetWorkspace.terminals.map((terminal) =>
         terminal.id === terminalId ? { ...terminal, name: normalized } : terminal,
       ),
     });
   };
-  const editTerminal = async (definition: TerminalDefinition) => {
-    if (!workspace) return;
+  const editTerminal = async (targetWorkspace: Workspace, definition: TerminalDefinition) => {
     await persist({
-      ...workspace,
-      terminals: workspace.terminals.map((terminal) =>
+      ...targetWorkspace,
+      terminals: targetWorkspace.terminals.map((terminal) =>
         terminal.id === definition.id ? definition : terminal,
       ),
     });
@@ -258,7 +263,28 @@ function TurtorgeApp() {
       <div className="app-body">
         <WorkspaceSidebar workspaces={workspaces} activeWorkspaceId={workspace?.id ?? null} runtimes={runtimes} errors={errors} pendingConnections={pendingConnections} collapsed={sidebarCollapsed} onSelect={(id) => void selectWorkspace(id)} onSelectTerminal={(workspaceId, paneId, terminalId) => void selectSidebarTerminal(workspaceId, paneId, terminalId).catch(() => undefined)} onCreate={() => setDialog("createWorkspace")} onSettings={() => setDialog("settings")} />
         <main className="main-content">
-          {workspace ? <><WorkspaceHeader workspace={workspace} runtimes={runtimes} onNewTerminal={() => openNewTerminal()} /><TerminalWorkspace workspace={workspace} layoutError={layoutError} terminalFocusRequest={terminalFocusRequest} onDismissLayoutError={() => setLayoutError(null)} onSelectTerminal={selectTerminal} onNewTerminal={openNewTerminal} onSplit={split} onRatioChange={ratioChange} onMoveTerminal={moveTerminalTab} onDeletePane={deletePane} onRemoveTerminal={removeTerminal} onRenameTerminal={renameTerminal} onEditTerminal={editTerminal} onOpenLauncherSettings={() => setDialog("settings")} /></> : <EmptyState onCreate={() => setDialog("createWorkspace")} />}
+          {workspace ? <><WorkspaceHeader workspace={workspace} runtimes={runtimes} onNewTerminal={() => openNewTerminal()} /><div className="workspace-terminal-deck">{workspaces.map((item) => {
+            const isActive = item.id === workspace.id;
+            return <div key={item.id} className={`workspace-terminal-layer ${isActive ? "active" : "inactive"}`} aria-hidden={!isActive}>
+              <TerminalWorkspace
+                workspace={item}
+                visible={isActive}
+                layoutError={isActive ? layoutError : null}
+                terminalFocusRequest={isActive ? terminalFocusRequest : null}
+                onDismissLayoutError={() => setLayoutError(null)}
+                onSelectTerminal={(paneId, terminalId) => selectTerminal(item, paneId, terminalId)}
+                onNewTerminal={openNewTerminal}
+                onSplit={(paneId, direction) => split(item, paneId, direction)}
+                onRatioChange={(splitId, ratio) => ratioChange(item, splitId, ratio)}
+                onMoveTerminal={(sourcePaneId, targetPaneId, terminalId, targetIndex) => moveTerminalTab(item, sourcePaneId, targetPaneId, terminalId, targetIndex)}
+                onDeletePane={(paneId) => deletePane(item, paneId)}
+                onRemoveTerminal={(terminalId) => removeTerminal(item, terminalId)}
+                onRenameTerminal={(terminalId, name) => renameTerminal(item, terminalId, name)}
+                onEditTerminal={(definition) => editTerminal(item, definition)}
+                onOpenLauncherSettings={() => setDialog("settings")}
+              />
+            </div>;
+          })}</div></> : <EmptyState onCreate={() => setDialog("createWorkspace")} />}
         </main>
       </div>
       <StatusBar workspace={workspace} runtimes={runtimes} />

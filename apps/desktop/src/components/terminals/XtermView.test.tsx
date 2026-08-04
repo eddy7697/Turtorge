@@ -12,6 +12,7 @@ const xterm = vi.hoisted(() => ({
   keyHandler: null as ((event: KeyboardEvent) => boolean) | null,
   writes: [] as Array<string | number[]>,
   fit: vi.fn(),
+  refresh: vi.fn(),
   focus: vi.fn(),
   dispose: vi.fn(),
 }));
@@ -29,6 +30,7 @@ vi.mock("@xterm/xterm", () => ({
     onData() { return { dispose: vi.fn() }; }
     onResize() { return { dispose: vi.fn() }; }
     write(data: string | Uint8Array) { xterm.writes.push(typeof data === "string" ? data : Array.from(data)); }
+    refresh(start: number, end: number) { xterm.refresh(start, end); }
     focus() { xterm.focus(); }
     dispose() { xterm.dispose(); }
   },
@@ -105,6 +107,7 @@ describe("XtermView", () => {
     xterm.keyHandler = null;
     xterm.writes.length = 0;
     xterm.fit.mockClear();
+    xterm.refresh.mockClear();
     xterm.focus.mockClear();
     xterm.dispose.mockClear();
     vi.mocked(api.attachTerminal).mockReset();
@@ -126,7 +129,7 @@ describe("XtermView", () => {
   });
 
   it("sends Shift+Enter as an extended key without passing Enter to xterm", async () => {
-    render(<XtermView workspace={workspace} definition={workspace.terminals[0]} activate={false} connectionGeneration={0} />);
+    render(<XtermView workspace={workspace} definition={workspace.terminals[0]} activate={false} connectionGeneration={0} visible />);
     await waitFor(() => expect(xterm.keyHandler).not.toBeNull());
     const preventDefault = vi.fn();
 
@@ -155,7 +158,7 @@ describe("XtermView", () => {
       return new Promise((resolve) => { resolveAttach = resolve; });
     });
     useAppStore.setState({ runtimes: { [runtime.definitionId]: runtime } });
-    const { unmount } = render(<XtermView workspace={workspace} definition={workspace.terminals[0]} activate connectionGeneration={0} />);
+    const { unmount } = render(<XtermView workspace={workspace} definition={workspace.terminals[0]} activate connectionGeneration={0} visible />);
 
     await waitFor(() => expect(emit).toBeDefined());
     emit!({ event: "output", data: [2] });
@@ -169,17 +172,56 @@ describe("XtermView", () => {
     expect(api.detachTerminal).toHaveBeenCalledWith(runtime.id, "workspace-test:terminal-claude:0:connection-test");
   });
 
+  it("keeps a hidden running terminal attached and processing output", async () => {
+    let emit: ((event: TerminalEvent) => void) | undefined;
+    vi.mocked(api.attachTerminal).mockImplementation((_runtimeId, _connectionId, onEvent) => {
+      emit = onEvent;
+      return Promise.resolve(runtime);
+    });
+    useAppStore.setState({ runtimes: { [runtime.definitionId]: runtime } });
+
+    render(
+      <XtermView workspace={workspace} definition={workspace.terminals[0]} activate connectionGeneration={0} visible={false} />,
+    );
+
+    await waitFor(() => expect(emit).toBeDefined());
+    emit!({ event: "output", data: [7, 8] });
+    await waitFor(() => expect(xterm.writes).toEqual([[7, 8]]));
+    expect(api.attachTerminal).toHaveBeenCalledTimes(1);
+    expect(xterm.focus).not.toHaveBeenCalled();
+  });
+
   it("focuses the terminal when a sidebar focus request changes", async () => {
     const definition = workspace.terminals[0];
     const { rerender } = render(
-      <XtermView workspace={workspace} definition={definition} activate={false} connectionGeneration={0} />,
+      <XtermView workspace={workspace} definition={definition} activate={false} connectionGeneration={0} visible />,
     );
-    expect(xterm.focus).not.toHaveBeenCalled();
+    await waitFor(() => expect(xterm.focus).toHaveBeenCalled());
+    xterm.focus.mockClear();
 
     rerender(
-      <XtermView workspace={workspace} definition={definition} activate={false} connectionGeneration={0} focusRequest={1} />,
+      <XtermView workspace={workspace} definition={definition} activate={false} connectionGeneration={0} visible focusRequest={1} />,
     );
 
     await waitFor(() => expect(xterm.focus).toHaveBeenCalledTimes(1));
+  });
+
+  it("refreshes the retained terminal when it becomes visible", async () => {
+    const definition = workspace.terminals[0];
+    const { rerender } = render(
+      <XtermView workspace={workspace} definition={definition} activate={false} connectionGeneration={0} visible={false} />,
+    );
+    xterm.fit.mockClear();
+    xterm.refresh.mockClear();
+    xterm.focus.mockClear();
+
+    rerender(
+      <XtermView workspace={workspace} definition={definition} activate={false} connectionGeneration={0} visible />,
+    );
+
+    await waitFor(() => expect(xterm.refresh).toHaveBeenCalledWith(0, 23));
+    expect(xterm.fit).toHaveBeenCalled();
+    expect(xterm.focus).toHaveBeenCalled();
+    expect(xterm.dispose).not.toHaveBeenCalled();
   });
 });
