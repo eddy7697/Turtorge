@@ -1,12 +1,14 @@
 # Turtorge UI Specification
 
 Version: 0.1.0
-Status: Draft
+Status: Draft product specification; not an implemented-surface inventory
 Primary Platform: Windows
 Future Platforms: macOS, Linux
 Frontend: React + TypeScript
 Desktop Framework: Tauri v2
 Terminal Renderer: xterm.js
+
+> Current-state notice (2026-08-08): This document preserves the original UI direction and includes deferred surfaces such as the command palette, manifest import, and future macOS shortcuts. Use `DEVELOPMENT_HISTORY.md`, `MVP_IMPLEMENTATION.md`, and `README.md` for current behavior. See `MACOS_HANDOFF.md` before macOS work.
 
 ---
 

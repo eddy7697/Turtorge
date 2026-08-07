@@ -68,10 +68,14 @@ Context menus support right-click, Shift+F10, the Menu key, arrow-key navigation
 
 ## Requirements
 
+The supported native development and release environment is currently Windows:
+
 - Windows 10 or 11 with WebView2
 - Rust stable with the MSVC toolchain and a Windows SDK
 - Node.js and pnpm 11
 - WSL only when WSL terminal profiles are required
+
+The repository pins `pnpm@11.9.0` but does not yet pin a Node.js, Rust, or platform SDK version. A macOS source checkout is useful for frontend work and port investigation, but native macOS support has not been implemented or verified. See [`docs/MACOS_HANDOFF.md`](docs/MACOS_HANDOFF.md) before running or planning native work on a Mac.
 
 ## Development
 
@@ -143,12 +147,13 @@ Configuration and runtime are deliberately separate. Turtorge definitions persis
 
 ## Repository documentation
 
-- [`docs/PRD.md`](docs/PRD.md) — product requirements.
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system boundaries and architecture.
-- [`docs/UI_SPEC.md`](docs/UI_SPEC.md) — interaction and visual specification.
+- [`docs/DEVELOPMENT_HISTORY.md`](docs/DEVELOPMENT_HISTORY.md) — authoritative decisions, discoveries, verification, delivery history, and deferred scope.
 - [`docs/MVP_IMPLEMENTATION.md`](docs/MVP_IMPLEMENTATION.md) — confirmed MVP implementation decisions.
-- [`docs/DEVELOPMENT_HISTORY.md`](docs/DEVELOPMENT_HISTORY.md) — authoritative decisions, discoveries, verification, and delivery history.
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — staged product direction.
+- [`docs/MACOS_HANDOFF.md`](docs/MACOS_HANDOFF.md) — current macOS limitations, investigation evidence, and scope boundaries.
+- [`docs/PRD.md`](docs/PRD.md) — original draft product requirements and vision; not an implementation inventory.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — original draft architecture and future boundaries; some proposed modules and dependencies were not adopted.
+- [`docs/UI_SPEC.md`](docs/UI_SPEC.md) — original draft interaction and visual specification; it includes deferred surfaces.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — future product direction; completed state is governed by the development history.
 
 ## Current product boundary
 

@@ -1,7 +1,9 @@
 # Turtorge PRD
 Version: 0.1.0
 
-Status: Draft
+Status: Draft product vision; not an implementation inventory
+
+> Current-state notice (2026-08-08): This document preserves the original product direction and includes aspirational MVP and future features. For confirmed implementation, verification, and deferred scope, consult `DEVELOPMENT_HISTORY.md`, `MVP_IMPLEMENTATION.md`, and `README.md` in that order. Native macOS support remains unimplemented; see `MACOS_HANDOFF.md`.
 
 Author: Eddy Lee
 

@@ -1,12 +1,14 @@
 # Turtorge Architecture
 
 Version: 0.1.0
-Status: Draft
+Status: Draft target architecture; not an as-built inventory
 Primary Platform: Windows
 Future Platforms: macOS, Linux
 Core Language: Rust
 Desktop Framework: Tauri v2
 Frontend: React + TypeScript
+
+> Current-state notice (2026-08-08): This document contains proposed structures, dependencies, and future platform abstractions that were not all adopted by the Windows MVP. Use `DEVELOPMENT_HISTORY.md` and the source tree for the as-built architecture. Native macOS support remains unimplemented; see `MACOS_HANDOFF.md`.
 
 ---
 

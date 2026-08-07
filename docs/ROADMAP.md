@@ -1,5 +1,10 @@
 # Platform Roadmap
 
+Status: directional roadmap; implementation state is recorded in `DEVELOPMENT_HISTORY.md`
+Last reconciled: 2026-08-08
+
+This roadmap preserves future direction. A phase heading or listed capability is not evidence that the capability has shipped.
+
 Turtorge 採用 Rust + Tauri 作為核心架構。
 
 雖然第一版以 Windows Developer 為主要目標，但從專案建立之初，即以跨平台能力作為設計原則。
@@ -11,13 +16,16 @@ Primary Platform
 - Windows 11
 - Windows 10
 
-完整支援：
+目前已完成並驗證：
 
 - PowerShell
 - WSL2
-- Git Bash
 - Windows Path
 - Windows Clipboard
+
+仍屬後續範圍：
+
+- Git Bash
 
 此階段所有 UX 均以 Windows Developer 為中心。
 
@@ -26,6 +34,8 @@ Primary Platform
 ## Phase 2
 
 Native macOS Support
+
+Status: not started; scope requires explicit approval before implementation.
 
 目標：
 
@@ -50,6 +60,8 @@ Workspace Manifest
 必須可完全跨平台。
 
 Windows 建立的 Workspace 應能直接於 macOS 開啟。
+
+This remains a future goal. The `.turtorge.yml` manifest and cross-platform migration flow are not implemented in the current source. See `MACOS_HANDOFF.md` for the present blockers and required decisions.
 
 ---
 

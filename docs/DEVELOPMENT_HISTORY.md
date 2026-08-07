@@ -1,7 +1,7 @@
 # Turtorge Development History
 
-Last updated: 2026-08-05
-Current stage: Context-menu-driven terminal and workspace actions, force restart, external launcher profiles, the full terminal editor, and persistent TUI rendering across terminal/workspace switches are implemented and verified; date-stamped standalone builds prevent active or prior releases from being overwritten
+Last updated: 2026-08-08
+Current stage: The completed Windows feature baseline remains unchanged; repository documentation now distinguishes the verified implementation from the original draft vision, and a macOS handoff records the current porting blockers and evidence requirements
 
 This document preserves the product and engineering context of the first Turtorge implementation cycle so future work can continue without reconstructing decisions from chat history.
 
@@ -63,6 +63,8 @@ The product direction was stress-tested with the user before implementation. The
 - Unity launching is Windows-only, requires both `Assets` and `ProjectSettings`, reads the required editor version from `ProjectVersion.txt`, and stops with an actionable error if that exact installed version cannot be found.
 - Externally launched file managers and editors are detached from Turtorge: they are not treated as terminal processes, counted in running badges, or terminated on application exit.
 - A future macOS implementation should give Finder the same built-in file-manager role that File Explorer has on Windows.
+- Cloning the source repository on macOS does not constitute native macOS support. Native build, PTY behavior, platform UI, launchers, packaging, signing, and delivery remain unimplemented and unverified.
+- `DEVELOPMENT_HISTORY.md` and `MVP_IMPLEMENTATION.md` govern confirmed implementation state. `PRD.md`, `ARCHITECTURE.md`, `UI_SPEC.md`, and `ROADMAP.md` preserve draft vision and future direction where they describe capabilities outside that state.
 - Edit Terminal now owns the full terminal definition. Label and launcher changes apply immediately; shell, working directory, startup command, environment, and auto-start changes apply on the next start. A running terminal receives an explicit Restart Now or Later choice when process configuration changes. Tab double-click remains the quick-rename path.
 - Terminal tabs and sidebar terminal entries use the same custom context menu for launcher access, start or confirmed force restart, rename, full editing, and confirmed deletion. Right-clicking does not change the active workspace or terminal; actions target the item that opened the menu.
 - The visible tab-close, pane-edit, and pane-delete buttons are removed. The high-frequency external-launcher button remains visible, while pane creation, splitting, and deletion move to the pane action-area context menu; native xterm right-click behavior remains untouched.
@@ -409,6 +411,17 @@ The context-menu interaction follow-up additionally passed:
 - Tauri CLI `--no-bundle` production build at `artifacts/2026-08-05_00-41-03_056/release/turtorge.exe`, recovered from one transient silent MSVC linker failure by retrying the same isolated target with one Cargo job; SHA-256 `C511FD412791A214412FBEF3CEDDA379D8B6157D9957F3278ED533A4E206AB4F`
 
 The production frontend currently emits a non-blocking warning that the main JavaScript chunk is larger than 500 kB. Code splitting is a future optimization, not an MVP blocker.
+
+The 2026-08-08 documentation and macOS handoff audit additionally confirmed:
+
+- The implementation baseline before the documentation update was `db18dac` on `develop` with a clean worktree.
+- Frontend Vitest remained 42/42, the Rust default suite remained 18 passed with 1 Windows/WSL integration test ignored, and TypeScript project compilation succeeded.
+- The current path and shell enums expose only Windows/WSL and PowerShell/WSL variants; native macOS workspace creation and terminal startup therefore require domain and IPC changes, not only a new build target.
+- Frontend bootstrap copy, environment selection, window controls, and shortcuts remain Windows-oriented.
+- External-launcher discovery, validation, and detached process creation remain Windows-oriented; Finder and macOS application launching are not implemented.
+- User workspace and settings JSON live in the platform application-data directory and are not transferred by Git. `.turtorge.yml` import/export and cross-platform migration remain deferred.
+- The repository pins pnpm 11.9.0 but not Node.js, Rust, or Xcode versions. Tool activation and dependency-install failures must be distinguished from application test failures in future handoffs.
+- `docs/MACOS_HANDOFF.md` now defines the evidence to record, the scope decision required before implementation, and the existing non-negotiable product boundaries.
 
 ## 7. Delivery state
 
