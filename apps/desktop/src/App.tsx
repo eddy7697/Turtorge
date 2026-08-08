@@ -1,4 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { FolderOpen, Pencil, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ThemeProvider } from "./app/ThemeProvider";
@@ -15,7 +16,7 @@ import { WorkspaceSidebar } from "./components/shell/WorkspaceSidebar";
 import { TerminalWorkspace } from "./components/terminals/TerminalWorkspace";
 import { TerminalActions, type TerminalActionRequest } from "./components/terminals/TerminalActions";
 import { ContextMenu, type ContextMenuPoint } from "./components/ui/ContextMenu";
-import { closeTerminal, isTauri, startTerminal, terminateAllTerminals } from "./lib/api";
+import { closeTerminal, isTauri, quitApplication, startTerminal, terminateAllTerminals } from "./lib/api";
 import {
   addTerminalToPane,
   findPane,
@@ -44,7 +45,9 @@ function TurtorgeApp() {
   const workspaces = useAppStore((state) => state.workspaces);
   const workspace = useAppStore(selectActiveWorkspace);
   const settings = useAppStore((state) => state.settings);
+  const platform = useAppStore((state) => state.platform);
   const windowsShells = useAppStore((state) => state.windowsShells);
+  const nativeShells = useAppStore((state) => state.nativeShells);
   const wslDistributions = useAppStore((state) => state.wslDistributions);
   const launcherProfiles = useAppStore((state) => state.launcherProfiles);
   const runtimes = useAppStore((state) => state.runtimes);
@@ -86,21 +89,30 @@ function TurtorgeApp() {
     let unlisten: (() => void) | undefined;
     void getCurrentWindow().onCloseRequested((event) => {
       event.preventDefault();
-      requestQuit();
+      if (platform === "macos") void getCurrentWindow().hide();
+      else requestQuit();
     }).then((dispose) => { unlisten = dispose; });
     return () => unlisten?.();
-  }, [requestQuit]);
+  }, [platform, requestQuit]);
+
+  useEffect(() => {
+    if (!isTauri() || platform !== "macos") return;
+    let unlisten: (() => void) | undefined;
+    void listen("turtorge://quit-requested", requestQuit).then((dispose) => { unlisten = dispose; });
+    return () => unlisten?.();
+  }, [platform, requestQuit]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.ctrlKey && event.key.toLowerCase() === "b") { event.preventDefault(); toggleSidebar(); }
-      if (event.ctrlKey && event.key.toLowerCase() === "p") { event.preventDefault(); setDialog("quickOpen"); }
-      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "t") { event.preventDefault(); if (workspace) { setNewTerminalTarget({ workspaceId: workspace.id, paneId: firstPaneId(workspace.layout) }); setDialog("newTerminal"); } }
-      if (event.ctrlKey && event.key === ",") { event.preventDefault(); setDialog("settings"); }
+      const appModifier = platform === "macos" ? event.metaKey : event.ctrlKey;
+      if (appModifier && event.key.toLowerCase() === "b") { event.preventDefault(); toggleSidebar(); }
+      if (appModifier && event.key.toLowerCase() === "p") { event.preventDefault(); setDialog("quickOpen"); }
+      if (appModifier && event.shiftKey && event.key.toLowerCase() === "t") { event.preventDefault(); if (workspace) { setNewTerminalTarget({ workspaceId: workspace.id, paneId: firstPaneId(workspace.layout) }); setDialog("newTerminal"); } }
+      if (appModifier && event.key === ",") { event.preventDefault(); setDialog("settings"); }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [toggleSidebar, workspace]);
+  }, [platform, toggleSidebar, workspace]);
 
   useEffect(() => {
     if (!workspace) return;
@@ -274,11 +286,11 @@ function TurtorgeApp() {
   const newTerminalWorkspace = workspaces.find((item) => item.id === newTerminalTarget?.workspaceId);
   const terminalContextTargetId = terminalActionRequest?.kind === "menu" ? terminalActionRequest.target.definition.id : null;
 
-  if (!initialized || loading) return <div className="boot-screen"><img src="/logo.png" alt="Turtorge" /><span className="loading-line" /><div className="boot-status" role="status" aria-live="polite"><strong>Preparing your terminal environments…</strong><small>Detecting PowerShell and WSL quietly in the background.</small></div></div>;
+  if (!initialized || loading) return <div className="boot-screen"><img src="/logo.png" alt="Turtorge" /><span className="loading-line" /><div className="boot-status" role="status" aria-live="polite"><strong>Preparing your terminal environments…</strong><small>Detecting available shells quietly in the background.</small></div></div>;
 
   return (
-    <div className="app-shell">
-      <TitleBar sidebarCollapsed={sidebarCollapsed} onToggleSidebar={toggleSidebar} onQuickOpen={() => setDialog("quickOpen")} onNewTerminal={() => openNewTerminal(workspace)} onSettings={() => setDialog("settings")} onRequestQuit={requestQuit} />
+    <div className={`app-shell platform-${platform}`}>
+      <TitleBar platform={platform} sidebarCollapsed={sidebarCollapsed} onToggleSidebar={toggleSidebar} onQuickOpen={() => setDialog("quickOpen")} onNewTerminal={() => openNewTerminal(workspace)} onSettings={() => setDialog("settings")} onRequestQuit={requestQuit} />
       <div className="app-body">
         <WorkspaceSidebar workspaces={workspaces} activeWorkspaceId={workspace?.id ?? null} runtimes={runtimes} errors={errors} pendingConnections={pendingConnections} collapsed={sidebarCollapsed} onSelect={(id) => void selectWorkspace(id)} onSelectTerminal={(workspaceId, paneId, terminalId) => void selectSidebarTerminal(workspaceId, paneId, terminalId).catch(() => undefined)} workspaceContextTargetId={workspaceMenu?.workspace.id ?? null} terminalContextTargetId={terminalContextTargetId} onWorkspaceContextMenu={(targetWorkspace, point) => { setTerminalActionRequest(null); setWorkspaceMenu({ workspace: targetWorkspace, point }); }} onTerminalContextMenu={(targetWorkspace, definition, point) => { setWorkspaceMenu(null); setTerminalActionRequest({ kind: "menu", target: { workspace: targetWorkspace, definition }, point }); }} onCreate={() => setDialog("createWorkspace")} onSettings={() => setDialog("settings")} />
         <main className="main-content">
@@ -308,9 +320,9 @@ function TurtorgeApp() {
       </div>
       <StatusBar workspace={workspace} runtimes={runtimes} />
 
-      {dialog === "createWorkspace" && <CreateWorkspaceDialog windowsShells={windowsShells} wslDistributions={wslDistributions} launcherProfiles={launcherProfiles} globalDefaultLauncherId={settings.defaultLauncherProfileId} onClose={() => setDialog(null)} onCreate={createWorkspace} />}
-      {dialog === "newTerminal" && newTerminalWorkspace && <NewTerminalDialog workspace={newTerminalWorkspace} windowsShells={windowsShells} wslDistributions={wslDistributions} launcherProfiles={launcherProfiles} globalDefaultLauncherId={settings.defaultLauncherProfileId} onClose={() => { setDialog(null); setNewTerminalTarget(null); }} onCreate={createTerminal} />}
-      {dialog === "settings" && <SettingsDialog settings={settings} launcherProfiles={launcherProfiles} workspaces={workspaces} windowsShells={windowsShells} wslDistributions={wslDistributions} onChange={updateSettings} onDeleteProfile={deleteLauncherProfile} onClose={() => setDialog(null)} />}
+      {dialog === "createWorkspace" && <CreateWorkspaceDialog platform={platform} windowsShells={windowsShells} nativeShells={nativeShells} wslDistributions={wslDistributions} launcherProfiles={launcherProfiles} globalDefaultLauncherId={settings.defaultLauncherProfileId} onClose={() => setDialog(null)} onCreate={createWorkspace} />}
+      {dialog === "newTerminal" && newTerminalWorkspace && <NewTerminalDialog platform={platform} workspace={newTerminalWorkspace} windowsShells={windowsShells} nativeShells={nativeShells} wslDistributions={wslDistributions} launcherProfiles={launcherProfiles} globalDefaultLauncherId={settings.defaultLauncherProfileId} onClose={() => { setDialog(null); setNewTerminalTarget(null); }} onCreate={createTerminal} />}
+      {dialog === "settings" && <SettingsDialog platform={platform} settings={settings} launcherProfiles={launcherProfiles} workspaces={workspaces} windowsShells={windowsShells} nativeShells={nativeShells} wslDistributions={wslDistributions} onChange={updateSettings} onDeleteProfile={deleteLauncherProfile} onClose={() => setDialog(null)} />}
       {dialog === "quickOpen" && <QuickOpenDialog workspaces={workspaces} onSelect={(id) => void selectWorkspace(id)} onClose={() => setDialog(null)} />}
       {dialog === "quit" && <ConfirmQuitDialog workspaceCount={runningWorkspaceCount} terminalCount={runningCount} onCancel={() => setDialog(null)} onConfirm={() => void finishQuit()} />}
 
@@ -329,8 +341,8 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
 }
 
 async function finishQuit() {
-  await terminateAllTerminals();
-  if (isTauri()) await getCurrentWindow().destroy();
+  if (isTauri()) await quitApplication();
+  else await terminateAllTerminals();
 }
 
 function messageFromReason(reason: unknown): string {

@@ -1,9 +1,10 @@
 use crate::AppState;
 use crate::error::ApiError;
 use crate::models::{
-    AppSettings, BootstrapPayload, LauncherLaunchResult, LauncherOpenRequest, LauncherProfile,
-    LauncherProfileStatus, LauncherValidationResult, TerminalEvent, TerminalRuntimeSnapshot,
-    TerminalStartRequest, Workspace, WorkspacePath, WslDistribution, WslShellDetection,
+    AppSettings, BootstrapPayload, DesktopPlatform, LauncherLaunchResult, LauncherOpenRequest,
+    LauncherProfile, LauncherProfileStatus, LauncherValidationResult, TerminalEvent,
+    TerminalRuntimeSnapshot, TerminalStartRequest, Workspace, WorkspacePath, WslDistribution,
+    WslShellDetection,
 };
 use crate::{launcher, platform};
 use chrono::Utc;
@@ -15,12 +16,24 @@ type CommandResult<T> = Result<T, ApiError>;
 #[tauri::command]
 pub fn app_bootstrap(state: State<'_, AppState>) -> CommandResult<BootstrapPayload> {
     let settings = state.repository.settings().map_err(ApiError::from)?;
+    let platform_kind = platform::current_platform();
     Ok(BootstrapPayload {
+        platform: platform_kind.clone(),
         workspaces: state.repository.list_workspaces().map_err(ApiError::from)?,
         launcher_profiles: launcher::launcher_statuses(&settings),
         settings,
-        windows_shells: platform::detect_windows_shells(),
-        wsl_distributions: platform::list_wsl_distributions().unwrap_or_default(),
+        windows_shells: matches!(platform_kind, DesktopPlatform::Windows)
+            .then(platform::detect_windows_shells)
+            .unwrap_or_default(),
+        native_shells: matches!(
+            platform_kind,
+            DesktopPlatform::Macos | DesktopPlatform::Linux
+        )
+        .then(platform::detect_native_shells)
+        .unwrap_or_default(),
+        wsl_distributions: matches!(platform_kind, DesktopPlatform::Windows)
+            .then(|| platform::list_wsl_distributions().unwrap_or_default())
+            .unwrap_or_default(),
     })
 }
 
@@ -106,6 +119,16 @@ pub fn settings_update(
 #[tauri::command]
 pub fn platform_detect_windows_shells() -> Vec<crate::models::ShellProfile> {
     platform::detect_windows_shells()
+}
+
+#[tauri::command]
+pub fn platform_detect_native_shells() -> Vec<crate::models::ShellProfile> {
+    platform::detect_native_shells()
+}
+
+#[tauri::command]
+pub fn platform_validate_shell(executable: String) -> bool {
+    platform::validate_shell_executable(&executable)
 }
 
 #[tauri::command]
@@ -219,4 +242,10 @@ pub fn terminal_list_runtime(state: State<'_, AppState>) -> Vec<TerminalRuntimeS
 #[tauri::command]
 pub fn terminal_terminate_all(state: State<'_, AppState>) {
     state.terminals.terminate_all();
+}
+
+#[tauri::command]
+pub fn app_quit(app: tauri::AppHandle, state: State<'_, AppState>) {
+    state.terminals.terminate_all();
+    app.exit(0);
 }

@@ -12,7 +12,7 @@ export function LauncherLogo({ icon, accent, size = 24 }: LauncherLogoProps) {
   const gradientId = useId().replaceAll(":", "");
   const style = { width: size, height: size, color: accent || undefined };
 
-  if (icon === "explorer") return <FolderOpen className="launcher-logo explorer" style={style} />;
+  if (icon === "explorer" || icon === "finder") return <FolderOpen className={`launcher-logo ${icon}`} style={style} />;
   if (icon === "appWindow") return <AppWindow className="launcher-logo custom" style={style} />;
   if (icon === "terminal") return <TerminalSquare className="launcher-logo custom" style={style} />;
   if (icon === "code") return <Code2 className="launcher-logo custom" style={style} />;

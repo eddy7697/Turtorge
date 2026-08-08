@@ -1,7 +1,9 @@
 import { FolderOpen, LoaderCircle, RotateCw } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
-import { chooseWindowsDirectory, chooseWslDirectory, detectWslShells, validatePath } from "../../lib/api";
+import { chooseNativeDirectory, chooseWindowsDirectory, chooseWslDirectory, detectWslShells, validatePath, validateShellExecutable } from "../../lib/api";
+import { CUSTOM_SHELL_ID, defaultEnvironment, isCustomNativeShell, nativeShellProfile, type TerminalEnvironment } from "../../lib/platform";
 import type {
+  DesktopPlatform,
   EnvironmentVariable,
   LauncherProfileStatus,
   PathKind,
@@ -20,6 +22,8 @@ export function EditTerminalDialog({
   definition,
   workspace,
   windowsShells,
+  nativeShells = [],
+  platform = "windows",
   wslDistributions,
   launcherProfiles,
   globalDefaultLauncherId,
@@ -31,6 +35,8 @@ export function EditTerminalDialog({
   definition: TerminalDefinition;
   workspace: Workspace;
   windowsShells: ShellProfile[];
+  nativeShells?: ShellProfile[];
+  platform?: DesktopPlatform;
   wslDistributions: WslDistribution[];
   launcherProfiles: LauncherProfileStatus[];
   globalDefaultLauncherId?: string | null;
@@ -39,8 +45,9 @@ export function EditTerminalDialog({
   onRestart: () => Promise<void>;
   onClose: () => void;
 }) {
-  const initialEnvironment = definition.shellProfile.kind === "wsl" ? "wsl" : "windows";
-  const [environment, setEnvironment] = useState<"windows" | "wsl">(initialEnvironment);
+  const isMacos = platform === "macos";
+  const initialEnvironment = defaultEnvironment(platform, definition.shellProfile.kind === "wsl");
+  const [environment, setEnvironment] = useState<TerminalEnvironment>(initialEnvironment);
   const [distribution, setDistribution] = useState(
     definition.shellProfile.distribution
       ?? definition.workingDirectory.distribution
@@ -50,7 +57,10 @@ export function EditTerminalDialog({
   const [wslShells, setWslShells] = useState<ShellProfile[]>(
     initialEnvironment === "wsl" ? [definition.shellProfile] : [],
   );
-  const [shellId, setShellId] = useState(definition.shellProfile.id);
+  const initialCustomNative = isCustomNativeShell(definition.shellProfile, nativeShells);
+  const [shellId, setShellId] = useState(initialCustomNative ? CUSTOM_SHELL_ID : definition.shellProfile.id);
+  const [customShellPath, setCustomShellPath] = useState(initialCustomNative ? definition.shellProfile.executable : "");
+  const [customLoginShell, setCustomLoginShell] = useState(initialCustomNative ? definition.shellProfile.loginShell : true);
   const [name, setName] = useState(definition.name);
   const [profile, setProfile] = useState(definition.profile);
   const [workingDirectory, setWorkingDirectory] = useState<WorkspacePath>(definition.workingDirectory);
@@ -81,10 +91,12 @@ export function EditTerminalDialog({
     return () => { cancelled = true; };
   }, [distribution, environment]);
 
-  const availableShells = environment === "wsl" ? wslShells : windowsShells;
-  const selectedShell = availableShells.find((shell) => shell.id === shellId);
+  const availableShells = environment === "macos" ? nativeShells : environment === "wsl" ? wslShells : windowsShells;
+  const selectedShell = shellId === CUSTOM_SHELL_ID && customShellPath.trim()
+    ? nativeShellProfile(customShellPath, customLoginShell)
+    : availableShells.find((shell) => shell.id === shellId);
 
-  const changeEnvironment = (next: "windows" | "wsl") => {
+  const changeEnvironment = (next: TerminalEnvironment) => {
     setEnvironment(next);
     if (next === "windows") {
       setShellId(windowsShells[0]?.id ?? "");
@@ -112,7 +124,7 @@ export function EditTerminalDialog({
   };
 
   const changeWorkingDirectory = (value: string) => {
-    const kind = environment === "windows" ? "windows" : inferPathKind(value, workingDirectory.kind);
+    const kind = environment === "macos" ? "native" : environment === "windows" ? "windows" : inferPathKind(value, workingDirectory.kind);
     setWorkingDirectory({ kind, value, distribution: kind === "wsl" ? distribution : null });
   };
 
@@ -122,6 +134,9 @@ export function EditTerminalDialog({
       if (environment === "wsl") {
         const selected = await chooseWslDirectory(distribution);
         if (selected) setWorkingDirectory(selected);
+      } else if (environment === "macos") {
+        const selected = await chooseNativeDirectory();
+        if (selected) setWorkingDirectory({ kind: "native", value: selected, distribution: null });
       } else {
         const selected = await chooseWindowsDirectory();
         if (selected) setWorkingDirectory({ kind: "windows", value: selected, distribution: null });
@@ -136,6 +151,10 @@ export function EditTerminalDialog({
     setError("");
     if (!selectedShell || !name.trim()) {
       setError("Select an available shell and enter a terminal name.");
+      return;
+    }
+    if (selectedShell.kind === "native" && !(await validateShellExecutable(selectedShell.executable))) {
+      setError("The selected shell is not an executable file.");
       return;
     }
     const terminalDirectory: WorkspacePath = workingDirectory.kind === "wsl"
@@ -219,12 +238,12 @@ export function EditTerminalDialog({
         <fieldset className="field full-width segmented-field">
           <legend>Environment</legend>
           <div className="segmented-control">
-            <button type="button" disabled={workspace.rootDirectory.kind === "wsl"} className={environment === "windows" ? "active" : ""} onClick={() => changeEnvironment("windows")}>Windows</button>
-            <button type="button" disabled={wslDistributions.length === 0} className={environment === "wsl" ? "active" : ""} onClick={() => changeEnvironment("wsl")}>WSL</button>
+            {isMacos ? <button type="button" className="active">macOS</button> : <><button type="button" disabled={workspace.rootDirectory.kind === "wsl"} className={environment === "windows" ? "active" : ""} onClick={() => changeEnvironment("windows")}>Windows</button><button type="button" disabled={wslDistributions.length === 0} className={environment === "wsl" ? "active" : ""} onClick={() => changeEnvironment("wsl")}>WSL</button></>}
           </div>
         </fieldset>
         {environment === "wsl" && <label className="field full-width"><span>Distribution</span><select value={distribution} onChange={(event) => changeDistribution(event.target.value)}>{wslDistributions.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}</select></label>}
-        <label className="field full-width"><span>Shell</span><select value={shellId} disabled={loadingShells} onChange={(event) => setShellId(event.target.value)}>{loadingShells && <option>Detecting shells…</option>}{!loadingShells && availableShells.length === 0 && <option>No supported shell found</option>}{availableShells.map((shell) => <option key={shell.id} value={shell.id}>{shell.name}</option>)}</select></label>
+        <label className="field full-width"><span>Shell</span><select value={shellId} disabled={loadingShells} onChange={(event) => setShellId(event.target.value)}>{loadingShells && <option>Detecting shells…</option>}{!loadingShells && availableShells.length === 0 && <option>No supported shell found</option>}{availableShells.map((shell) => <option key={shell.id} value={shell.id}>{shell.name}</option>)}{isMacos && <option value={CUSTOM_SHELL_ID}>Custom shell…</option>}</select></label>
+        {isMacos && shellId === CUSTOM_SHELL_ID && <><label className="field"><span>Shell executable</span><input value={customShellPath} placeholder="/opt/homebrew/bin/fish" onChange={(event) => setCustomShellPath(event.target.value)} /></label><label className="checkbox-field"><input type="checkbox" checked={customLoginShell} onChange={(event) => setCustomLoginShell(event.target.checked)} /><span><strong>Login shell</strong><small>Pass -l before interactive mode.</small></span></label></>}
         <label className="field"><span>Profile</span><select value={profile} onChange={(event) => setProfile(event.target.value as TerminalProfileKind)}><option value="shell">Shell</option><option value="claudeCode">Claude Code</option><option value="codex">Codex</option><option value="custom">Custom command</option></select></label>
         <div className="field"><label htmlFor="edit-terminal-startup-command">Startup command</label><input id="edit-terminal-startup-command" value={startupCommand} placeholder={profile === "claudeCode" ? "claude" : profile === "codex" ? "codex" : "Optional"} onChange={(event) => setStartupCommand(event.target.value)} /><small>Overrides the profile default when provided.</small></div>
         <div className="field full-width"><label htmlFor="edit-terminal-working-directory">Working directory</label><div className="input-with-action"><input id="edit-terminal-working-directory" value={workingDirectory.value} onChange={(event) => changeWorkingDirectory(event.target.value)} /><button type="button" className="icon-button" onClick={() => void browse()} aria-label={environment === "wsl" ? "Browse WSL folders" : "Browse folders"}><FolderOpen size={15} /></button></div></div>

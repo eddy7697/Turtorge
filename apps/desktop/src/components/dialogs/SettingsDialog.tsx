@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { chooseLauncherProgram, validateLauncherProfile } from "../../lib/api";
 import type {
   AppSettings,
+  DesktopPlatform,
   LauncherDetectionMode,
   LauncherIcon,
   LauncherProfile,
@@ -20,6 +21,8 @@ interface SettingsDialogProps {
   launcherProfiles: LauncherProfileStatus[];
   workspaces: Workspace[];
   windowsShells: ShellProfile[];
+  nativeShells?: ShellProfile[];
+  platform?: DesktopPlatform;
   wslDistributions: WslDistribution[];
   onChange: (settings: AppSettings) => Promise<void>;
   onDeleteProfile: (profileId: string, settings: AppSettings) => Promise<void>;
@@ -31,6 +34,8 @@ export function SettingsDialog({
   launcherProfiles,
   workspaces,
   windowsShells,
+  nativeShells = [],
+  platform = "windows",
   wslDistributions,
   onChange,
   onDeleteProfile,
@@ -58,6 +63,7 @@ export function SettingsDialog({
     return (
       <LauncherProfileEditor
         profile={editingProfile}
+        platform={platform}
         onCancel={() => setEditingProfile(null)}
         onSave={async (profile) => {
           setSaving(true);
@@ -148,7 +154,7 @@ export function SettingsDialog({
       <div className="settings-sections">
         <section>
           <h3>Appearance</h3>
-          <p>System follows the current Windows appearance setting.</p>
+          <p>System follows the current {platform === "macos" ? "macOS" : "Windows"} appearance setting.</p>
           <div className="theme-options">
             {(["system", "light", "dark"] as ThemePreference[]).map((theme) => (
               <label key={theme} className={settings.theme === theme ? "active" : ""}>
@@ -245,12 +251,12 @@ export function SettingsDialog({
 
         <section>
           <div className="section-title-row">
-            <div><h3>Shells</h3><p>PowerShell uses the highest installed version by default.</p></div>
+            <div><h3>Shells</h3><p>{platform === "macos" ? "The configured macOS login shell is selected by default." : "PowerShell uses the highest installed version by default."}</p></div>
             <button className="secondary-button" disabled><RefreshCw size={13} /> Refresh</button>
           </div>
           <div className="detection-list">
-            {windowsShells.map((shell, index) => <div key={shell.id}><span><strong>{shell.name}</strong><small>{shell.executable}</small></span><span className="availability">{index === 0 ? "Default" : "Available"}</span></div>)}
-            {wslDistributions.map((distribution) => <div key={distribution.name}><span><strong>{distribution.name}</strong><small>WSL {distribution.version} · Shells detected on selection</small></span><span className="availability">{distribution.isRunning ? "Running" : "Available"}</span></div>)}
+            {(platform === "macos" ? nativeShells : windowsShells).map((shell, index) => <div key={shell.id}><span><strong>{shell.name}</strong><small>{shell.executable}</small></span><span className="availability">{index === 0 ? "Default" : "Available"}</span></div>)}
+            {platform !== "macos" && wslDistributions.map((distribution) => <div key={distribution.name}><span><strong>{distribution.name}</strong><small>WSL {distribution.version} · Shells detected on selection</small></span><span className="availability">{distribution.isRunning ? "Running" : "Available"}</span></div>)}
           </div>
         </section>
         {error && <div className="form-error" role="alert">{error}</div>}
@@ -288,8 +294,9 @@ function LauncherPresetCard({ status, selected, disabled, onSelect, onClone }: {
   );
 }
 
-function LauncherProfileEditor({ profile, saving, externalError, onSave, onCancel }: {
+function LauncherProfileEditor({ profile, platform, saving, externalError, onSave, onCancel }: {
   profile: LauncherProfile;
+  platform: DesktopPlatform;
   saving: boolean;
   externalError: string | null;
   onSave: (profile: LauncherProfile) => Promise<void>;
@@ -323,7 +330,7 @@ function LauncherProfileEditor({ profile, saving, externalError, onSave, onCance
     if (validation.valid) await onSave(draft);
   };
   const browse = async () => {
-    const program = await chooseLauncherProgram();
+    const program = await chooseLauncherProgram(platform);
     if (program) setDraft({ ...draft, program, detectionMode: "manual" });
   };
 
@@ -349,19 +356,19 @@ function LauncherProfileEditor({ profile, saving, externalError, onSave, onCance
         <label className="field">
           <span>Program</span>
           <div className="input-with-action">
-            <input value={draft.program} placeholder={draft.detectionMode === "auto" ? "code" : "C:\\Path\\Editor.exe"} onChange={(event) => setDraft({ ...draft, program: event.target.value })} />
+            <input value={draft.program} placeholder={draft.detectionMode === "auto" ? (platform === "macos" ? "Editor.app" : "code") : (platform === "macos" ? "/Applications/Editor.app" : "C:\\Path\\Editor.exe")} onChange={(event) => setDraft({ ...draft, program: event.target.value })} />
             <button className="icon-button" title="Locate executable" aria-label="Locate executable" onClick={() => void browse()}><FileSearch size={15} /></button>
           </div>
-          <small>Allowed: .exe, .com, .cmd, and .bat. Auto-detect checks PATH and trusted install locations.</small>
+          <small>{platform === "macos" ? "Allowed: executable files and .app bundles. Auto-detect checks the login PATH and trusted application locations." : "Allowed: .exe, .com, .cmd, and .bat. Auto-detect checks PATH and trusted install locations."}</small>
         </label>
 
         <ArgumentEditor title="Arguments" arguments={draft.arguments} onChange={(index, value) => updateArguments("arguments", index, value)} onRemove={(index) => removeArgument("arguments", index)} onAdd={() => addArgument("arguments")} />
 
-        <label className="checkbox-field">
+        {platform !== "macos" && <label className="checkbox-field">
           <input type="checkbox" checked={draft.wslArguments != null} onChange={(event) => setDraft({ ...draft, wslArguments: event.target.checked ? ["{path}"] : null })} />
           <span><strong>Use different arguments for WSL paths</strong><small>Use {"{wslPath}"} and {"{distribution}"} for tools with native WSL support.</small></span>
-        </label>
-        {draft.wslArguments && <ArgumentEditor title="WSL arguments" arguments={draft.wslArguments} onChange={(index, value) => updateArguments("wslArguments", index, value)} onRemove={(index) => removeArgument("wslArguments", index)} onAdd={() => addArgument("wslArguments")} />}
+        </label>}
+        {platform !== "macos" && draft.wslArguments && <ArgumentEditor title="WSL arguments" arguments={draft.wslArguments} onChange={(index, value) => updateArguments("wslArguments", index, value)} onRemove={(index) => removeArgument("wslArguments", index)} onAdd={() => addArgument("wslArguments")} />}
 
         <div className="launcher-appearance-editor">
           <div><strong>Profile icon</strong><small>Clones keep the original product mark. Custom profiles can use a generic mark and accent.</small></div>
@@ -373,9 +380,9 @@ function LauncherProfileEditor({ profile, saving, externalError, onSave, onCance
 
         <div className="launcher-placeholder-help">
           <strong>Placeholders</strong>
-          <span><code>{"{path}"}</code> Windows path or WSL UNC path</span>
-          <span><code>{"{wslPath}"}</code> Linux path inside the selected distribution</span>
-          <span><code>{"{distribution}"}</code> WSL distribution name</span>
+          <span><code>{"{path}"}</code> {platform === "macos" ? "Native macOS working directory" : "Windows path or WSL UNC path"}</span>
+          {platform !== "macos" && <span><code>{"{wslPath}"}</code> Linux path inside the selected distribution</span>}
+          {platform !== "macos" && <span><code>{"{distribution}"}</code> WSL distribution name</span>}
           <span><code>{"{projectRoot}"}</code> Nearest detected project root</span>
         </div>
         <div className="launcher-command-preview"><strong>Preview</strong><code>{commandPreview(draft)}</code></div>

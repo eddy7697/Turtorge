@@ -6,10 +6,12 @@ import type { ShellProfile, Workspace, WorkspacePath } from "../../types";
 import { NewTerminalDialog } from "./NewTerminalDialog";
 
 const apiMocks = vi.hoisted(() => ({
+  chooseNativeDirectory: vi.fn(),
   chooseWindowsDirectory: vi.fn(),
   chooseWslDirectory: vi.fn(),
   detectWslShells: vi.fn(),
   validatePath: vi.fn(),
+  validateShellExecutable: vi.fn(),
 }));
 
 vi.mock("../../lib/api", () => apiMocks);
@@ -22,6 +24,18 @@ const wslShell: ShellProfile = {
   version: "zsh 5.9",
   distribution: "Ubuntu-24.04",
   shell: "/usr/bin/zsh",
+  loginShell: true,
+  available: true,
+};
+
+const nativeShell: ShellProfile = {
+  id: "native-zsh-bin-zsh",
+  name: "zsh (login shell)",
+  kind: "native",
+  executable: "/bin/zsh",
+  version: "zsh 5.9",
+  distribution: null,
+  shell: "zsh",
   loginShell: true,
   available: true,
 };
@@ -52,6 +66,8 @@ describe("NewTerminalDialog", () => {
       shells: [wslShell],
     });
     apiMocks.validatePath.mockResolvedValue(true);
+    apiMocks.validateShellExecutable.mockResolvedValue(true);
+    apiMocks.chooseNativeDirectory.mockResolvedValue("/Users/developer/Projects/app");
     apiMocks.chooseWslDirectory.mockResolvedValue({
       kind: "wsl",
       value: "/home/vince/projects/app",
@@ -102,5 +118,36 @@ describe("NewTerminalDialog", () => {
 
     expect(screen.getByRole("status").textContent).toContain("Detecting WSL shells");
     expect(screen.getByRole("status").textContent).toContain("Ubuntu-24.04");
+  });
+
+  it("creates a native macOS terminal from the folder picker", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const nativeWorkspace: Workspace = {
+      ...workspace,
+      rootDirectory: { kind: "native", value: "/Users/developer/Projects/Test", distribution: null },
+      defaultShellProfile: nativeShell,
+    };
+    render(
+      <NewTerminalDialog
+        platform="macos"
+        workspace={nativeWorkspace}
+        windowsShells={[]}
+        nativeShells={[nativeShell]}
+        wslDistributions={[]}
+        onClose={vi.fn()}
+        onCreate={onCreate}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "macOS" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Browse folders" }));
+    await waitFor(() => expect(screen.getByLabelText("Working directory")).toHaveProperty("value", "/Users/developer/Projects/app"));
+    fireEvent.click(screen.getByRole("button", { name: "Save and Start" }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
+    expect(onCreate.mock.calls[0][0]).toMatchObject({
+      shellProfile: { kind: "native", executable: "/bin/zsh" },
+      workingDirectory: { kind: "native", value: "/Users/developer/Projects/app", distribution: null },
+    });
   });
 });

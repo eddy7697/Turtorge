@@ -6,10 +6,12 @@ import type { LauncherProfileStatus, ShellProfile, TerminalDefinition, Workspace
 import { EditTerminalDialog } from "./EditTerminalDialog";
 
 const apiMocks = vi.hoisted(() => ({
+  chooseNativeDirectory: vi.fn(),
   chooseWindowsDirectory: vi.fn(),
   chooseWslDirectory: vi.fn(),
   detectWslShells: vi.fn(),
   validatePath: vi.fn(),
+  validateShellExecutable: vi.fn(),
 }));
 vi.mock("../../lib/api", () => apiMocks);
 

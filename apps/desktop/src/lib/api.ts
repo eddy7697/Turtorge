@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AppSettings,
   BootstrapPayload,
+  DesktopPlatform,
   LauncherLaunchResult,
   LauncherOpenRequest,
   LauncherProfile,
@@ -79,17 +80,48 @@ const mockWslShell: ShellProfile = {
   available: true,
 };
 
+const mockNativeShell: ShellProfile = {
+  id: "native-zsh-bin-zsh",
+  name: "zsh (login shell)",
+  kind: "native",
+  executable: "/bin/zsh",
+  version: "zsh 5.9",
+  distribution: null,
+  shell: "zsh",
+  loginShell: true,
+  available: true,
+};
+
+function browserPlatform(): DesktopPlatform {
+  return /Mac|iPhone|iPad/.test(navigator.userAgent) ? "macos" : "windows";
+}
+
 function mockBootstrap(): BootstrapPayload {
+  const platform = browserPlatform();
+  const builtInLaunchers = platform === "macos"
+    ? [
+        { ...mockExplorerLauncher, id: "builtin-finder", name: "Finder", program: "/usr/bin/open", icon: "finder" as const },
+        ...mockBuiltInLaunchers.slice(1).map((profile) => ({
+          ...profile,
+          program: profile.id === "builtin-unity" ? "Unity.app" : `${profile.name}.app`,
+          wslArguments: null,
+        })),
+      ]
+    : mockBuiltInLaunchers;
   if (mockWorkspaces.length === 0 && new URLSearchParams(location.search).has("demo")) {
     const now = new Date().toISOString();
+    const demoRoot: Workspace["rootDirectory"] = platform === "macos"
+      ? { kind: "native", value: "/Users/developer/Projects/Turtorge", distribution: null }
+      : { kind: "windows", value: "E:\\Projects\\Turtorge", distribution: null };
+    const demoShell = platform === "macos" ? mockNativeShell : mockWslShell;
     mockWorkspaces = [
       {
         id: "workspace-demo",
         name: "Turtorge",
         description: "Workspace-first terminal manager",
         color: "#72d8c9",
-        rootDirectory: { kind: "windows", value: "E:\\Projects\\Turtorge" },
-        defaultShellProfile: mockWslShell,
+        rootDirectory: demoRoot,
+        defaultShellProfile: demoShell,
         environmentVariables: [],
         pinned: true,
         favorite: true,
@@ -102,17 +134,17 @@ function mockBootstrap(): BootstrapPayload {
             id: "terminal-codex",
             name: "Codex",
             profile: "codex",
-            shellProfile: mockWslShell,
-            workingDirectory: { kind: "windows", value: "E:\\Projects\\Turtorge" },
+            shellProfile: demoShell,
+            workingDirectory: demoRoot,
             environmentVariables: [],
             autoStart: true,
           },
           {
             id: "terminal-powershell",
-            name: "PowerShell 7",
+            name: platform === "macos" ? "Shell" : "PowerShell 7",
             profile: "shell",
-            shellProfile: mockPowerShell,
-            workingDirectory: { kind: "windows", value: "E:\\Projects\\Turtorge" },
+            shellProfile: demoShell,
+            workingDirectory: demoRoot,
             environmentVariables: [],
             autoStart: false,
           },
@@ -120,18 +152,18 @@ function mockBootstrap(): BootstrapPayload {
             id: "terminal-server",
             name: "API Server",
             profile: "custom",
-            shellProfile: mockWslShell,
-            workingDirectory: { kind: "windows", value: "E:\\Projects\\Turtorge" },
+            shellProfile: demoShell,
+            workingDirectory: demoRoot,
             startupCommand: "pnpm dev",
             environmentVariables: [],
             autoStart: true,
           },
           {
             id: "terminal-zsh",
-            name: "WSL zsh",
+            name: platform === "macos" ? "zsh" : "WSL zsh",
             profile: "shell",
-            shellProfile: mockWslShell,
-            workingDirectory: { kind: "windows", value: "E:\\Projects\\Turtorge" },
+            shellProfile: demoShell,
+            workingDirectory: demoRoot,
             environmentVariables: [],
             autoStart: true,
           },
@@ -170,17 +202,19 @@ function mockBootstrap(): BootstrapPayload {
     ];
   }
   return {
+    platform,
     workspaces: structuredClone(mockWorkspaces),
     settings: {
       ...structuredClone(mockSettings),
       lastActiveWorkspaceId: mockSettings.lastActiveWorkspaceId ?? mockWorkspaces[0]?.id ?? null,
     },
     windowsShells: [mockPowerShell],
+    nativeShells: platform === "macos" ? [mockNativeShell] : [],
     wslDistributions: [
       { name: "Ubuntu-20.04", isDefault: true, isRunning: true, version: 2 },
     ],
     launcherProfiles: [
-      ...mockBuiltInLaunchers.map((profile, index) => ({
+      ...builtInLaunchers.map((profile, index) => ({
         profile,
         available: index < 4,
         resolvedProgram: index < 4 ? profile.program : null,
@@ -249,12 +283,14 @@ export async function listLauncherProfiles(): Promise<BootstrapPayload["launcher
   return mockBootstrap().launcherProfiles;
 }
 
-export async function chooseLauncherProgram(): Promise<string | null> {
-  if (!isTauri()) return "C:\\Program Files\\Editor\\Editor.exe";
+export async function chooseLauncherProgram(platform: DesktopPlatform = browserPlatform()): Promise<string | null> {
+  if (!isTauri()) return platform === "macos" ? "/Applications/Editor.app" : "C:\\Program Files\\Editor\\Editor.exe";
   const selected = await open({
     directory: false,
     multiple: false,
-    filters: [{ name: "Launcher programs", extensions: ["exe", "com", "cmd", "bat"] }],
+    ...(platform === "windows"
+      ? { filters: [{ name: "Launcher programs", extensions: ["exe", "com", "cmd", "bat"] }] }
+      : {}),
   });
   return typeof selected === "string" ? selected : null;
 }
@@ -263,16 +299,26 @@ export async function openLauncher(
   request: LauncherOpenRequest,
 ): Promise<LauncherLaunchResult> {
   if (isTauri()) return invoke("launcher_open", { request });
-  const profileId = request.profileId ?? "builtin-explorer";
+  const profileId = request.profileId ?? (browserPlatform() === "macos" ? "builtin-finder" : "builtin-explorer");
   return {
     profileId,
-    program: "explorer.exe",
+    program: browserPlatform() === "macos" ? "/usr/bin/open" : "explorer.exe",
     arguments: [request.path.value],
   };
 }
 
 export async function detectWindowsShells(): Promise<ShellProfile[]> {
   return isTauri() ? invoke("platform_detect_windows_shells") : [mockPowerShell];
+}
+
+export async function detectNativeShells(): Promise<ShellProfile[]> {
+  return isTauri() ? invoke("platform_detect_native_shells") : [mockNativeShell];
+}
+
+export async function validateShellExecutable(executable: string): Promise<boolean> {
+  return isTauri()
+    ? invoke("platform_validate_shell", { executable })
+    : executable.trim().startsWith("/");
 }
 
 export async function listWslDistributions(): Promise<WslDistribution[]> {
@@ -296,6 +342,12 @@ export async function validatePath(path: WorkspacePath): Promise<boolean> {
 
 export async function chooseWindowsDirectory(): Promise<string | null> {
   if (!isTauri()) return "E:\\Projects\\Turtorge";
+  const selected = await open({ directory: true, multiple: false });
+  return typeof selected === "string" ? selected : null;
+}
+
+export async function chooseNativeDirectory(): Promise<string | null> {
+  if (!isTauri()) return "/Users/developer/Projects/Turtorge";
   const selected = await open({ directory: true, multiple: false });
   return typeof selected === "string" ? selected : null;
 }
@@ -399,6 +451,10 @@ export async function terminateAllTerminals(): Promise<void> {
   if (isTauri()) await invoke("terminal_terminate_all");
   mockRuntimes.clear();
   mockScrollback.clear();
+}
+
+export async function quitApplication(): Promise<void> {
+  if (isTauri()) await invoke("app_quit");
 }
 
 function mockTerminalOutput(name: string): string {

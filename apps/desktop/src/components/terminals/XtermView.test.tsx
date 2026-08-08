@@ -9,10 +9,12 @@ import { XtermView } from "./XtermView";
 import { SHIFT_ENTER_SEQUENCE } from "./terminalKeymap";
 
 const xterm = vi.hoisted(() => ({
+  dataHandler: null as ((data: string) => void) | null,
   keyHandler: null as ((event: KeyboardEvent) => boolean) | null,
   writes: [] as Array<string | number[]>,
   fit: vi.fn(),
   refresh: vi.fn(),
+  reset: vi.fn(),
   focus: vi.fn(),
   dispose: vi.fn(),
 }));
@@ -27,10 +29,11 @@ vi.mock("@xterm/xterm", () => ({
     loadAddon() {}
     open() {}
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) { xterm.keyHandler = handler; }
-    onData() { return { dispose: vi.fn() }; }
+    onData(handler: (data: string) => void) { xterm.dataHandler = handler; return { dispose: vi.fn() }; }
     onResize() { return { dispose: vi.fn() }; }
     write(data: string | Uint8Array) { xterm.writes.push(typeof data === "string" ? data : Array.from(data)); }
     refresh(start: number, end: number) { xterm.refresh(start, end); }
+    reset() { xterm.reset(); }
     focus() { xterm.focus(); }
     dispose() { xterm.dispose(); }
   },
@@ -104,10 +107,12 @@ const workspace: Workspace = {
 
 describe("XtermView", () => {
   beforeEach(() => {
+    xterm.dataHandler = null;
     xterm.keyHandler = null;
     xterm.writes.length = 0;
     xterm.fit.mockClear();
     xterm.refresh.mockClear();
+    xterm.reset.mockClear();
     xterm.focus.mockClear();
     xterm.dispose.mockClear();
     vi.mocked(api.attachTerminal).mockReset();
@@ -148,6 +153,38 @@ describe("XtermView", () => {
     await waitFor(() => expect(api.writeTerminalDefinition).toHaveBeenCalled());
     const bytes = vi.mocked(api.writeTerminalDefinition).mock.calls[0][1];
     expect(new TextDecoder().decode(bytes)).toBe(SHIFT_ENTER_SEQUENCE);
+  });
+
+  it("preserves xterm history and delete control sequences byte-for-byte", async () => {
+    render(<XtermView workspace={workspace} definition={workspace.terminals[0]} activate={false} connectionGeneration={0} visible />);
+    await waitFor(() => expect(xterm.dataHandler).not.toBeNull());
+
+    for (const sequence of ["\u001b[A", "\u001b[B", "\u007f", "\u001b[3~"]) {
+      xterm.dataHandler!(sequence);
+    }
+
+    await waitFor(() => expect(api.writeTerminalDefinition).toHaveBeenCalledTimes(4));
+    expect(vi.mocked(api.writeTerminalDefinition).mock.calls.map((call) => Array.from(call[1]))).toEqual([
+      [27, 91, 65],
+      [27, 91, 66],
+      [127],
+      [27, 91, 51, 126],
+    ]);
+  });
+
+  it("resets the emulator when a force restart requests a fresh generation", async () => {
+    const definition = workspace.terminals[0];
+    const { rerender } = render(
+      <XtermView workspace={workspace} definition={definition} activate={false} connectionGeneration={0} visible />,
+    );
+    await waitFor(() => expect(xterm.keyHandler).not.toBeNull());
+    expect(xterm.reset).not.toHaveBeenCalled();
+
+    rerender(
+      <XtermView workspace={workspace} definition={definition} activate={false} connectionGeneration={1} visible />,
+    );
+
+    await waitFor(() => expect(xterm.reset).toHaveBeenCalledTimes(1));
   });
 
   it("replays the snapshot before queued live output and attaches only once", async () => {

@@ -3,7 +3,10 @@ use crate::models::{
     PathKind, ShellKind, TerminalEvent, TerminalProfileKind, TerminalRuntimeSnapshot,
     TerminalStartRequest, TerminalStatus, merge_environment,
 };
-use crate::platform::{background_command_status, resolve_wsl_working_directory_with_fallback};
+use crate::platform::{
+    background_command_status, resolve_native_working_directory_with_fallback,
+    resolve_wsl_working_directory_with_fallback, validate_shell_executable,
+};
 use parking_lot::Mutex;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::collections::{HashMap, VecDeque};
@@ -155,15 +158,7 @@ impl TerminalManager {
             mut command,
             startup_notice,
         } = build_command(&request)?;
-        let environment = merge_environment(
-            &request.workspace_environment,
-            &request.definition.environment_variables,
-        );
-        if request.definition.shell_profile.kind == ShellKind::PowerShell {
-            for (key, value) in &environment {
-                command.env(key, value);
-            }
-        }
+        configure_command_environment(&request, &mut command);
 
         let child = pair
             .slave
@@ -181,11 +176,7 @@ impl TerminalManager {
             .master
             .take_writer()
             .map_err(|error| TurtorgeError::ProcessIoFailed(error.to_string()))?;
-        #[cfg(windows)]
-        writer
-            .write_all(b"\x1b[1;1R")
-            .and_then(|_| writer.flush())
-            .map_err(|error| TurtorgeError::ProcessIoFailed(error.to_string()))?;
+        bootstrap_pty_writer(&mut writer)?;
         let stream = Arc::new(TerminalStream::new(connection_id, channel));
         if let Some(notice) = startup_notice {
             stream.push(notice.as_bytes());
@@ -293,23 +284,41 @@ impl TerminalManager {
 
     pub fn close(&self, runtime_id: &str) -> Result<(), TurtorgeError> {
         let terminal = self.get(runtime_id)?;
-        *terminal.status.lock() = TerminalStatus::Stopping;
-        terminal
-            .stream
-            .send(TerminalEvent::Status(TerminalStatus::Stopping));
-
-        {
-            let mut writer = terminal.writer.lock();
-            let _ = writer.write_all(b"exit\r");
-            let _ = writer.flush();
-        }
-        thread::sleep(Duration::from_millis(180));
-        if matches!(*terminal.status.lock(), TerminalStatus::Stopping) {
+        let should_terminate = {
+            let mut status = terminal.status.lock();
+            if matches!(
+                *status,
+                TerminalStatus::Starting | TerminalStatus::Running | TerminalStatus::Stopping
+            ) {
+                *status = TerminalStatus::Stopping;
+                true
+            } else {
+                false
+            }
+        };
+        if should_terminate {
             terminal
-                .killer
-                .lock()
-                .kill()
-                .map_err(|error| TurtorgeError::ProcessTerminationFailed(error.to_string()))?;
+                .stream
+                .send(TerminalEvent::Status(TerminalStatus::Stopping));
+            let termination_error = terminal.killer.lock().kill().err();
+            let started = std::time::Instant::now();
+            while matches!(
+                *terminal.status.lock(),
+                TerminalStatus::Starting | TerminalStatus::Running | TerminalStatus::Stopping
+            ) && started.elapsed() < Duration::from_secs(2)
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if matches!(
+                *terminal.status.lock(),
+                TerminalStatus::Starting | TerminalStatus::Running | TerminalStatus::Stopping
+            ) {
+                let message = termination_error.map_or_else(
+                    || "terminal process did not exit within 2 seconds".to_owned(),
+                    |error| error.to_string(),
+                );
+                return Err(TurtorgeError::ProcessTerminationFailed(message));
+            }
         }
         self.terminals.lock().remove(runtime_id);
         Ok(())
@@ -431,7 +440,68 @@ fn build_command(request: &TerminalStartRequest) -> Result<BuiltCommand, Turtorg
                 }),
             })
         }
+        ShellKind::Native => {
+            if request.definition.working_directory.kind != PathKind::Native {
+                return Err(TurtorgeError::InvalidWorkingDirectory(
+                    request.definition.working_directory.value.clone(),
+                ));
+            }
+            if !validate_shell_executable(&profile.executable) {
+                return Err(TurtorgeError::ShellUnavailable(profile.executable.clone()));
+            }
+            let resolved = resolve_native_working_directory_with_fallback(
+                &request.definition.working_directory,
+            )?;
+            let mut command = CommandBuilder::new(&profile.executable);
+            if profile.login_shell {
+                command.arg("-l");
+            }
+            command.arg("-i");
+            command.cwd(&resolved.path);
+            Ok(BuiltCommand {
+                command,
+                startup_notice: resolved.used_home_fallback.then(|| {
+                    "\r\n[Turtorge] The configured macOS working directory is unavailable; started in ~.\r\n"
+                        .to_owned()
+                }),
+            })
+        }
     }
+}
+
+fn configure_command_environment(request: &TerminalStartRequest, command: &mut CommandBuilder) {
+    let environment = merge_environment(
+        &request.workspace_environment,
+        &request.definition.environment_variables,
+    );
+    if matches!(
+        request.definition.shell_profile.kind,
+        ShellKind::PowerShell | ShellKind::Native
+    ) {
+        for (key, value) in environment {
+            command.env(key, value);
+        }
+    }
+    if request.definition.shell_profile.kind == ShellKind::Native {
+        // GUI applications launched from Finder do not inherit a reliable TERM value.
+        // Turtorge renders an xterm-compatible, true-color terminal through xterm.js,
+        // so native child processes must always receive those capabilities explicitly.
+        command.env("TERM", "xterm-256color");
+        command.env("COLORTERM", "truecolor");
+        command.env("TERM_PROGRAM", "Turtorge");
+        command.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
+    }
+}
+
+fn bootstrap_pty_writer(writer: &mut Box<dyn Write + Send>) -> Result<(), TurtorgeError> {
+    #[cfg(windows)]
+    writer
+        .write_all(b"\x1b[1;1R")
+        .and_then(|_| writer.flush())
+        .map_err(|error| TurtorgeError::ProcessIoFailed(error.to_string()))?;
+    #[cfg(not(windows))]
+    let _ = writer;
+    Ok(())
 }
 
 fn startup_command(definition: &crate::models::TerminalDefinition) -> Option<String> {
@@ -455,13 +525,7 @@ fn spawn_reader(mut reader: Box<dyn Read + Send>, managed: Arc<ManagedTerminal>)
                 Ok(0) => break,
                 Ok(length) => {
                     let mut output = bytes[..length].to_vec();
-                    if !bootstrap_dsr_consumed
-                        && let Some(position) =
-                            output.windows(4).position(|window| window == b"\x1b[6n")
-                    {
-                        output.drain(position..position + 4);
-                        bootstrap_dsr_consumed = true;
-                    }
+                    strip_bootstrap_dsr(&mut output, &mut bootstrap_dsr_consumed);
                     if !output.is_empty() {
                         managed.stream.push(&output);
                     }
@@ -476,6 +540,17 @@ fn spawn_reader(mut reader: Box<dyn Read + Send>, managed: Arc<ManagedTerminal>)
             }
         }
     });
+}
+
+fn strip_bootstrap_dsr(output: &mut Vec<u8>, consumed: &mut bool) {
+    #[cfg(windows)]
+    if !*consumed && let Some(position) = output.windows(4).position(|window| window == b"\x1b[6n")
+    {
+        output.drain(position..position + 4);
+        *consumed = true;
+    }
+    #[cfg(not(windows))]
+    let _ = (output, consumed);
 }
 
 fn spawn_waiter(
@@ -533,6 +608,388 @@ mod terminal_stream_tests {
 
         stream.detach("replacement");
         assert!(stream.subscriber.lock().is_none());
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_integration_tests {
+    use super::*;
+    use crate::models::{
+        EnvironmentVariable, ShellProfile, TerminalDefinition, TerminalProfileKind, WorkspacePath,
+    };
+    use crate::platform::detect_native_shells;
+    use std::sync::mpsc;
+
+    #[test]
+    #[ignore = "launches real native macOS login shells through a PTY"]
+    fn real_native_login_shells_round_trip_through_a_pty() {
+        let shells = detect_native_shells();
+        assert!(!shells.is_empty(), "no native macOS shell was detected");
+        for shell in shells {
+            run_native_shell_smoke(shell);
+        }
+    }
+
+    #[test]
+    fn native_shell_receives_xterm_capabilities_even_when_the_app_does_not() {
+        let shell = detect_native_shells()
+            .into_iter()
+            .next()
+            .expect("a native macOS shell should be available");
+        let request = native_test_request(shell);
+        let mut built = build_command(&request).expect("native command should build");
+
+        configure_command_environment(&request, &mut built.command);
+
+        assert_eq!(
+            built.command.get_env("TERM"),
+            Some(std::ffi::OsStr::new("xterm-256color"))
+        );
+        assert_eq!(
+            built.command.get_env("COLORTERM"),
+            Some(std::ffi::OsStr::new("truecolor"))
+        );
+        assert_eq!(
+            built.command.get_env("TERM_PROGRAM"),
+            Some(std::ffi::OsStr::new("Turtorge"))
+        );
+        assert_eq!(
+            built.command.get_env("TERM_PROGRAM_VERSION"),
+            Some(std::ffi::OsStr::new(env!("CARGO_PKG_VERSION")))
+        );
+    }
+
+    #[test]
+    #[ignore = "drives real native macOS line editors through a PTY"]
+    fn native_shell_supports_history_and_delete_key_sequences() {
+        let shell = detect_native_shells()
+            .into_iter()
+            .find(|shell| shell.executable == "/bin/zsh")
+            .expect("zsh should be available on macOS");
+        let request = native_test_request(shell.clone());
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("PTY should open");
+        let mut built = build_command(&request).expect("native command should build");
+        configure_command_environment(&request, &mut built.command);
+        let mut child = pair
+            .slave
+            .spawn_command(built.command)
+            .expect("native login shell should start");
+        drop(pair.slave);
+
+        let reader = pair.master.try_clone_reader().expect("reader should clone");
+        let mut writer = pair.master.take_writer().expect("writer should open");
+        let receiver = spawn_chunk_reader(reader);
+        writer
+            .write_all(b"stty -echo\rprintf 'TURTORGE_LINE_EDITOR_READY\\n'\r")
+            .and_then(|_| writer.flush())
+            .expect("line editor setup should be writable");
+        collect_until(
+            &receiver,
+            "TURTORGE_LINE_EDITOR_READY",
+            Duration::from_secs(10),
+            &shell.name,
+        );
+
+        writer
+            .write_all(b"printf 'TURTORGE_HISTORY_OK\\n'\r")
+            .and_then(|_| writer.flush())
+            .expect("history command should be writable");
+        collect_until(
+            &receiver,
+            "TURTORGE_HISTORY_OK",
+            Duration::from_secs(5),
+            &shell.name,
+        );
+        writer
+            .write_all(b"\x1b[A\r")
+            .and_then(|_| writer.flush())
+            .expect("up-arrow history should be writable");
+        collect_until(
+            &receiver,
+            "TURTORGE_HISTORY_OK",
+            Duration::from_secs(5),
+            &shell.name,
+        );
+
+        writer
+            .write_all(b"printf 'TURTORGE_DOWN_OK\\n'\x1b[A\x1b[B\r")
+            .and_then(|_| writer.flush())
+            .expect("down-arrow history should be writable");
+        collect_until(
+            &receiver,
+            "TURTORGE_DOWN_OK",
+            Duration::from_secs(5),
+            &shell.name,
+        );
+
+        writer
+            .write_all(b"printf 'TURTORGE_DELETE_OX\x7fK'\r")
+            .and_then(|_| writer.flush())
+            .expect("backspace sequence should be writable");
+        collect_until(
+            &receiver,
+            "TURTORGE_DELETE_OK",
+            Duration::from_secs(5),
+            &shell.name,
+        );
+
+        writer
+            .write_all(b"printf 'TURTORGE_FORWARD_XOK'\x1b[D\x1b[D\x1b[D\x1b[D\x1b[3~\r")
+            .and_then(|_| writer.flush())
+            .expect("forward-delete sequence should be writable");
+        collect_until(
+            &receiver,
+            "TURTORGE_FORWARD_OK",
+            Duration::from_secs(5),
+            &shell.name,
+        );
+
+        writer
+            .write_all(b"exit\r")
+            .and_then(|_| writer.flush())
+            .expect("interactive shell exit should be writable");
+        wait_for_success(&mut child, &shell.name);
+    }
+
+    #[test]
+    #[ignore = "launches a real native shell through TerminalManager"]
+    fn force_close_does_not_inject_a_shell_command_into_terminal_output() {
+        let shell = detect_native_shells()
+            .into_iter()
+            .find(|shell| shell.executable == "/bin/zsh")
+            .expect("zsh should be available on macOS");
+        let manager = TerminalManager::default();
+        let runtime = manager
+            .start(
+                native_test_request(shell),
+                "force-close-test".to_owned(),
+                Channel::new(|_| Ok(())),
+            )
+            .expect("native terminal should start");
+        let terminal = manager
+            .get(&runtime.id)
+            .expect("terminal should be managed");
+        thread::sleep(Duration::from_millis(250));
+        terminal.stream.buffer.lock().clear();
+
+        manager.close(&runtime.id).expect("terminal should close");
+        thread::sleep(Duration::from_millis(100));
+
+        let output = terminal
+            .stream
+            .buffer
+            .lock()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        assert!(
+            !String::from_utf8_lossy(&output).contains("exit"),
+            "force close leaked a shell command into terminal output: {:?}",
+            String::from_utf8_lossy(&output)
+        );
+    }
+
+    #[test]
+    #[ignore = "launches a foreground process that ignores SIGHUP"]
+    fn force_close_stops_the_foreground_process_before_returning() {
+        let shell = detect_native_shells()
+            .into_iter()
+            .find(|shell| shell.executable == "/bin/zsh")
+            .expect("zsh should be available on macOS");
+        let mut request = native_test_request(shell);
+        request.definition.startup_command = Some(
+            "/bin/sh -c 'trap \"\" HUP; i=0; while [ \"$i\" -lt 40 ]; do printf \"TURTORGE_OLD_PROCESS_ALIVE\\n\"; i=$((i+1)); sleep 0.05; done'"
+                .to_owned(),
+        );
+        let manager = TerminalManager::default();
+        let runtime = manager
+            .start(
+                request,
+                "foreground-close-test".to_owned(),
+                Channel::new(|_| Ok(())),
+            )
+            .expect("native terminal should start");
+        let terminal = manager
+            .get(&runtime.id)
+            .expect("terminal should be managed");
+        wait_for_stream_marker(&terminal.stream, "TURTORGE_OLD_PROCESS_ALIVE");
+
+        manager.close(&runtime.id).expect("terminal should close");
+        terminal.stream.buffer.lock().clear();
+        thread::sleep(Duration::from_millis(250));
+
+        let output = terminal
+            .stream
+            .buffer
+            .lock()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        assert!(
+            !String::from_utf8_lossy(&output).contains("TURTORGE_OLD_PROCESS_ALIVE"),
+            "force close returned while the old foreground process was still running"
+        );
+    }
+
+    fn wait_for_stream_marker(stream: &TerminalStream, marker: &str) {
+        let started = std::time::Instant::now();
+        loop {
+            if String::from_utf8_lossy(&stream.buffer.lock().iter().copied().collect::<Vec<_>>())
+                .contains(marker)
+            {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "terminal stream did not emit {marker:?}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn native_test_request(shell: ShellProfile) -> TerminalStartRequest {
+        TerminalStartRequest {
+            workspace_id: "native-smoke-workspace".to_owned(),
+            definition: TerminalDefinition {
+                id: format!("native-smoke-{}", shell.id),
+                name: "Native smoke".to_owned(),
+                profile: TerminalProfileKind::Shell,
+                shell_profile: shell,
+                working_directory: WorkspacePath {
+                    kind: PathKind::Native,
+                    value: std::env::current_dir()
+                        .expect("current directory")
+                        .to_string_lossy()
+                        .into_owned(),
+                    distribution: None,
+                },
+                startup_command: None,
+                environment_variables: vec![EnvironmentVariable {
+                    key: "TURTORGE_NATIVE_TEST".to_owned(),
+                    value: "environment-ok".to_owned(),
+                }],
+                auto_start: false,
+                launcher_profile_id: None,
+            },
+            workspace_environment: Vec::new(),
+            cols: 80,
+            rows: 24,
+        }
+    }
+
+    fn run_native_shell_smoke(shell: ShellProfile) {
+        let request = native_test_request(shell.clone());
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("PTY should open");
+        let mut built = build_command(&request).expect("native command should build");
+        configure_command_environment(&request, &mut built.command);
+        let mut child = pair
+            .slave
+            .spawn_command(built.command)
+            .expect("native login shell should start");
+        drop(pair.slave);
+
+        let reader = pair.master.try_clone_reader().expect("reader should clone");
+        let mut writer = pair.master.take_writer().expect("writer should open");
+        writer
+            .write_all(b"printf 'TURTORGE_NATIVE_PTY_OK:%s\\n' \"$TURTORGE_NATIVE_TEST\"\r")
+            .and_then(|_| writer.flush())
+            .expect("interactive smoke command should be writable");
+        let receiver = spawn_chunk_reader(reader);
+        let output = collect_until(
+            &receiver,
+            "TURTORGE_NATIVE_PTY_OK:environment-ok",
+            Duration::from_secs(10),
+            &shell.name,
+        );
+        assert!(String::from_utf8_lossy(&output).contains("TURTORGE_NATIVE_PTY_OK:environment-ok"));
+        writer
+            .write_all(b"exit\r")
+            .and_then(|_| writer.flush())
+            .expect("interactive shell exit should be writable");
+        wait_for_success(&mut child, &shell.name);
+    }
+
+    fn spawn_chunk_reader(mut reader: Box<dyn Read + Send>) -> mpsc::Receiver<Vec<u8>> {
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let mut bytes = vec![0_u8; 8192];
+            loop {
+                match reader.read(&mut bytes) {
+                    Ok(0) | Err(_) => break,
+                    Ok(length) => {
+                        if sender.send(bytes[..length].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        receiver
+    }
+
+    fn collect_until(
+        receiver: &mpsc::Receiver<Vec<u8>>,
+        marker: &str,
+        timeout: Duration,
+        process_name: &str,
+    ) -> Vec<u8> {
+        let started = std::time::Instant::now();
+        let mut output = Vec::new();
+        loop {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            assert!(
+                !remaining.is_zero(),
+                "{process_name} did not emit {marker:?}"
+            );
+            match receiver.recv_timeout(remaining) {
+                Ok(chunk) => {
+                    output.extend(chunk);
+                    if String::from_utf8_lossy(&output).contains(marker) {
+                        return output;
+                    }
+                }
+                Err(error) => panic!(
+                    "{process_name} output stopped before {marker:?}: {error}; output was {:?}",
+                    String::from_utf8_lossy(&output)
+                ),
+            }
+        }
+    }
+
+    fn wait_for_success(
+        child: &mut Box<dyn portable_pty::Child + Send + Sync>,
+        process_name: &str,
+    ) {
+        let started = std::time::Instant::now();
+        loop {
+            match child.try_wait().expect("child status should be readable") {
+                Some(status) => {
+                    assert_eq!(status.exit_code(), 0, "{process_name} did not exit cleanly");
+                    return;
+                }
+                None if started.elapsed() < Duration::from_secs(5) => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                None => {
+                    let _ = child.kill();
+                    panic!("{process_name} did not exit after emitting its PTY marker");
+                }
+            }
+        }
     }
 }
 

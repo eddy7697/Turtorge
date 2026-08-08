@@ -49,6 +49,7 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
   const runtimeIdRef = useRef<string | null>(null);
   const pendingInputRef = useRef<Uint8Array[]>([]);
   const visibleRef = useRef(visible);
+  const connectionGenerationRef = useRef(connectionGeneration);
   const [ready, setReady] = useState(false);
   const theme = useResolvedTheme();
   const setRuntime = useAppStore((state) => state.setRuntime);
@@ -156,6 +157,14 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
     });
     return () => cancelAnimationFrame(frame);
   }, [visible]);
+
+  useEffect(() => {
+    if (connectionGenerationRef.current === connectionGeneration) return;
+    connectionGenerationRef.current = connectionGeneration;
+    runtimeIdRef.current = null;
+    pendingInputRef.current = [];
+    terminalRef.current?.reset();
+  }, [connectionGeneration]);
 
   useEffect(() => {
     if (!ready || !activate) return;

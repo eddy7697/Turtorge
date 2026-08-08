@@ -1,9 +1,11 @@
 import { FolderOpen, LoaderCircle } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { chooseWindowsDirectory, detectWslShells, validatePath } from "../../lib/api";
+import { chooseNativeDirectory, chooseWindowsDirectory, detectWslShells, validatePath, validateShellExecutable } from "../../lib/api";
 import { createId } from "../../lib/ids";
 import { createPane } from "../../lib/layout";
+import { CUSTOM_SHELL_ID, defaultEnvironment, nativeShellProfile, type TerminalEnvironment } from "../../lib/platform";
 import type {
+  DesktopPlatform,
   EnvironmentVariable,
   LauncherProfileStatus,
   PathKind,
@@ -18,6 +20,8 @@ import { Modal } from "../ui/Modal";
 
 export function CreateWorkspaceDialog({
   windowsShells,
+  nativeShells = [],
+  platform = "windows",
   wslDistributions,
   launcherProfiles = [],
   globalDefaultLauncherId = null,
@@ -25,6 +29,8 @@ export function CreateWorkspaceDialog({
   onCreate,
 }: {
   windowsShells: ShellProfile[];
+  nativeShells?: ShellProfile[];
+  platform?: DesktopPlatform;
   wslDistributions: WslDistribution[];
   launcherProfiles?: LauncherProfileStatus[];
   globalDefaultLauncherId?: string | null;
@@ -32,16 +38,19 @@ export function CreateWorkspaceDialog({
   onCreate: (workspace: Workspace) => Promise<void>;
 }) {
   const [name, setName] = useState("");
-  const [environment, setEnvironment] = useState<"windows" | "wsl">(
-    wslDistributions.length > 0 ? "wsl" : "windows",
+  const isMacos = platform === "macos";
+  const [environment, setEnvironment] = useState<TerminalEnvironment>(
+    defaultEnvironment(platform, !isMacos && wslDistributions.length > 0),
   );
-  const [pathKind, setPathKind] = useState<PathKind>(environment === "wsl" ? "wsl" : "windows");
+  const [pathKind, setPathKind] = useState<PathKind>(isMacos ? "native" : environment === "wsl" ? "wsl" : "windows");
   const [path, setPath] = useState(environment === "wsl" ? "~" : "");
   const [distribution, setDistribution] = useState(
     wslDistributions.find((item) => item.isDefault)?.name ?? wslDistributions[0]?.name ?? "",
   );
   const [wslShells, setWslShells] = useState<ShellProfile[]>([]);
-  const [shellId, setShellId] = useState(windowsShells[0]?.id ?? "");
+  const [shellId, setShellId] = useState((isMacos ? nativeShells : windowsShells)[0]?.id ?? "");
+  const [customShellPath, setCustomShellPath] = useState("");
+  const [customLoginShell, setCustomLoginShell] = useState(true);
   const [profile, setProfile] = useState<TerminalProfileKind>("shell");
   const [terminalName, setTerminalName] = useState("Shell");
   const [environmentVariables, setEnvironmentVariables] = useState<EnvironmentVariable[]>([]);
@@ -67,10 +76,12 @@ export function CreateWorkspaceDialog({
     };
   }, [distribution, environment]);
 
-  const availableShells = environment === "wsl" ? wslShells : windowsShells;
-  const selectedShell = availableShells.find((shell) => shell.id === shellId);
+  const availableShells = environment === "macos" ? nativeShells : environment === "wsl" ? wslShells : windowsShells;
+  const selectedShell = shellId === CUSTOM_SHELL_ID && customShellPath.trim()
+    ? nativeShellProfile(customShellPath, customLoginShell)
+    : availableShells.find((shell) => shell.id === shellId);
   const terminalNames: Record<TerminalProfileKind, string> = {
-    shell: selectedShell?.shell?.endsWith("zsh") ? "WSL zsh" : selectedShell?.name ?? "Shell",
+    shell: selectedShell?.kind === "native" ? selectedShell.name.replace(/ \(.+\)$/, "") : selectedShell?.shell?.endsWith("zsh") ? "WSL zsh" : selectedShell?.name ?? "Shell",
     claudeCode: "Claude Code",
     codex: "Codex",
     custom: "Custom Terminal",
@@ -88,7 +99,7 @@ export function CreateWorkspaceDialog({
   }, [path]);
 
   const browse = async () => {
-    const selected = await chooseWindowsDirectory();
+    const selected = isMacos ? await chooseNativeDirectory() : await chooseWindowsDirectory();
     if (selected) {
       setPath(selected);
       if (!name) setName(selected.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "");
@@ -100,6 +111,10 @@ export function CreateWorkspaceDialog({
     setError("");
     if (!name.trim() || !path.trim() || !selectedShell) {
       setError("Workspace name, directory, and an available shell are required.");
+      return;
+    }
+    if (selectedShell.kind === "native" && !(await validateShellExecutable(selectedShell.executable))) {
+      setError("The selected shell is not an executable file.");
       return;
     }
     const rootDirectory = {
@@ -177,8 +192,14 @@ export function CreateWorkspaceDialog({
         <fieldset className="field full-width segmented-field">
           <legend>Environment</legend>
           <div className="segmented-control">
-            <button type="button" className={environment === "windows" ? "active" : ""} onClick={() => { setEnvironment("windows"); setPathKind("windows"); setPath(""); setShellId(windowsShells[0]?.id ?? ""); }}>Windows</button>
-            <button type="button" disabled={wslDistributions.length === 0} className={environment === "wsl" ? "active" : ""} onClick={() => { setEnvironment("wsl"); setPathKind("wsl"); setPath("~"); }}>WSL</button>
+            {isMacos ? (
+              <button type="button" className="active">macOS</button>
+            ) : (
+              <>
+                <button type="button" className={environment === "windows" ? "active" : ""} onClick={() => { setEnvironment("windows"); setPathKind("windows"); setPath(""); setShellId(windowsShells[0]?.id ?? ""); }}>Windows</button>
+                <button type="button" disabled={wslDistributions.length === 0} className={environment === "wsl" ? "active" : ""} onClick={() => { setEnvironment("wsl"); setPathKind("wsl"); setPath("~"); }}>WSL</button>
+              </>
+            )}
           </div>
         </fieldset>
 
@@ -201,10 +222,10 @@ export function CreateWorkspaceDialog({
         )}
 
         <label className="field full-width">
-          <span>{pathKind === "wsl" ? "Linux path" : "Windows folder"}</span>
+          <span>{pathKind === "wsl" ? "Linux path" : pathKind === "native" ? "macOS folder" : "Windows folder"}</span>
           <div className="input-with-action">
-            <input value={path} placeholder={pathKind === "wsl" ? "/home/user/projects/app" : "E:\\Projects\\App"} onChange={(event) => setPath(event.target.value)} />
-            {pathKind === "windows" && <button type="button" className="icon-button" onClick={browse} aria-label="Browse folders"><FolderOpen size={15} /></button>}
+            <input value={path} placeholder={pathKind === "wsl" ? "/home/user/projects/app" : pathKind === "native" ? "/Users/you/Projects/App" : "E:\\Projects\\App"} onChange={(event) => setPath(event.target.value)} />
+            {pathKind !== "wsl" && <button type="button" className="icon-button" onClick={browse} aria-label="Browse folders"><FolderOpen size={15} /></button>}
           </div>
         </label>
 
@@ -214,9 +235,13 @@ export function CreateWorkspaceDialog({
             {loadingShells && <option>Detecting shells…</option>}
             {!loadingShells && availableShells.length === 0 && <option>No supported shell found</option>}
             {availableShells.map((shell) => <option key={shell.id} value={shell.id}>{shell.name}</option>)}
+            {isMacos && <option value={CUSTOM_SHELL_ID}>Custom shell…</option>}
           </select>
           {selectedShell?.kind === "wsl" && <small>Interactive login shell · default WSL user</small>}
+          {selectedShell?.kind === "native" && <small>Native interactive shell · macOS user environment</small>}
         </label>
+
+        {isMacos && shellId === CUSTOM_SHELL_ID && <><label className="field"><span>Shell executable</span><input value={customShellPath} placeholder="/opt/homebrew/bin/fish" onChange={(event) => setCustomShellPath(event.target.value)} /></label><label className="checkbox-field"><input type="checkbox" checked={customLoginShell} onChange={(event) => setCustomLoginShell(event.target.checked)} /><span><strong>Login shell</strong><small>Pass -l before interactive mode.</small></span></label></>}
 
         <label className="field">
           <span>Initial profile</span>

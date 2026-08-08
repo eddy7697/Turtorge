@@ -1,13 +1,15 @@
 export type ThemePreference = "system" | "light" | "dark";
 export type ResolvedTheme = "light" | "dark";
-export type PathKind = "windows" | "wsl";
-export type ShellKind = "powerShell" | "wsl";
+export type DesktopPlatform = "windows" | "macos" | "linux";
+export type PathKind = "windows" | "wsl" | "native";
+export type ShellKind = "powerShell" | "wsl" | "native";
 export type TerminalProfileKind = "shell" | "claudeCode" | "codex" | "custom";
 export type TerminalStatus = "starting" | "running" | "exited" | "failed" | "stopping";
 export type SplitDirection = "horizontal" | "vertical";
 export type LauncherDetectionMode = "auto" | "manual";
 export type LauncherIcon =
   | "explorer"
+  | "finder"
   | "vsCode"
   | "cursor"
   | "antigravity"
@@ -152,9 +154,11 @@ export interface WslShellDetection {
 }
 
 export interface BootstrapPayload {
+  platform: DesktopPlatform;
   workspaces: Workspace[];
   settings: AppSettings;
   windowsShells: ShellProfile[];
+  nativeShells: ShellProfile[];
   wslDistributions: WslDistribution[];
   launcherProfiles: LauncherProfileStatus[];
 }

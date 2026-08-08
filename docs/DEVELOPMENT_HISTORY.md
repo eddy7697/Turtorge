@@ -1,7 +1,7 @@
 # Turtorge Development History
 
 Last updated: 2026-08-08
-Current stage: The completed Windows feature baseline remains unchanged; repository documentation now distinguishes the verified implementation from the original draft vision, and a macOS handoff records the current porting blockers and evidence requirements
+Current stage: The completed Windows feature baseline remains unchanged; the native Apple Silicon macOS 0.2.0 application and delivery route are implemented and locally verified
 
 This document preserves the product and engineering context of the first Turtorge implementation cycle so future work can continue without reconstructing decisions from chat history.
 
@@ -60,10 +60,14 @@ The product direction was stress-tested with the user before implementation. The
 - Launcher profiles use a structured executable plus argument-token model, never a raw shell command or launcher-specific environment variables. Direct `.exe` and `.com` programs are allowed, `.cmd` and `.bat` use a controlled command invocation, and PowerShell scripts are rejected.
 - Built-in launcher profiles cover File Explorer, Visual Studio Code, Cursor, Antigravity, Zed, IntelliJ IDEA, Rider, WebStorm, PyCharm, and Unity. Unavailable tools remain visible but cannot be activated until their executable is located. Built-ins are read-only and may be cloned for customization.
 - Launcher templates support `{path}`, `{wslPath}`, `{distribution}`, and `{projectRoot}`. WSL-aware launchers may use dedicated WSL arguments; generic Windows launchers receive a `\\wsl.localhost` path. Missing WSL paths remain visible failures.
-- Unity launching is Windows-only, requires both `Assets` and `ProjectSettings`, reads the required editor version from `ProjectVersion.txt`, and stops with an actionable error if that exact installed version cannot be found.
+- Unity launching is supported from Windows and native macOS paths, requires both `Assets` and `ProjectSettings`, reads the required editor version from `ProjectVersion.txt`, and stops with an actionable error if that exact installed version cannot be found. Direct WSL project launching remains unsupported.
 - Externally launched file managers and editors are detached from Turtorge: they are not treated as terminal processes, counted in running badges, or terminated on application exit.
-- A future macOS implementation should give Finder the same built-in file-manager role that File Explorer has on Windows.
-- Cloning the source repository on macOS does not constitute native macOS support. Native build, PTY behavior, platform UI, launchers, packaging, signing, and delivery remain unimplemented and unverified.
+- Finder has the same built-in file-manager role on macOS that File Explorer has on Windows and opens a terminal's saved directory through `/usr/bin/open {path}`.
+- Native macOS is implemented as a shared-codebase extension of the Windows product. The supported Mac target is Apple Silicon on macOS 12 or newer; Intel/x86 artifacts and acceptance are excluded.
+- The macOS feature target preserves the implemented Windows application surface while translating platform semantics: native zsh, bash, fish, and custom shells; Finder and macOS launchers; native traffic lights and Command/Option shortcuts; and a single restorable application window whose close action keeps managed terminals alive while Command+Q confirms termination.
+- macOS uses independent platform application-data settings. Existing Windows JSON remains backward compatible, but automatic Windows-to-Mac migration and `.turtorge.yml` portability remain deferred.
+- The macOS release target is version 0.2.0 with Apple Silicon `.app` and `.dmg` artifacts. Ad-hoc signing is the available local delivery gate; Developer ID signing and notarization must be wired for credentialed execution without storing credentials in the repository.
+- A saved macOS working directory that disappears may fall back to the user's home only with a visible terminal notice. Newly selected invalid directories and missing configured shells fail visibly without silent substitution.
 - `DEVELOPMENT_HISTORY.md` and `MVP_IMPLEMENTATION.md` govern confirmed implementation state. `PRD.md`, `ARCHITECTURE.md`, `UI_SPEC.md`, and `ROADMAP.md` preserve draft vision and future direction where they describe capabilities outside that state.
 - Edit Terminal now owns the full terminal definition. Label and launcher changes apply immediately; shell, working directory, startup command, environment, and auto-start changes apply on the next start. A running terminal receives an explicit Restart Now or Later choice when process configuration changes. Tab double-click remains the quick-rename path.
 - Terminal tabs and sidebar terminal entries use the same custom context menu for launcher access, start or confirmed force restart, rename, full editing, and confirmed deletion. Right-clicking does not change the active workspace or terminal; actions target the item that opened the menu.
@@ -124,6 +128,9 @@ The source logo was not altered. `images/app-icon.png` and the Tauri platform ic
 - Shared custom context menus for terminal tabs, sidebar terminals, workspaces, and pane action areas, with viewport clamping, disabled-state explanations, keyboard navigation, and Escape focus restoration
 - Context-targeted rename and full editor flows, confirmed terminal deletion, and confirmed force restart through a freshly attached PTY
 - Workspace rename dialog and context-targeted New Terminal flow for active or inactive workspaces
+- Platform-aware Create Workspace, New Terminal, Edit Terminal, Settings, launcher, title-bar, and shortcut flows for native macOS shells and paths
+- Native traffic-light spacing and Command shortcut labels without rendering the Windows minimize/maximize/close controls on macOS
+- Close-to-hide, Dock-reopen, and confirmed Command+Q application lifecycle integration
 
 ### Rust and Tauri
 
@@ -146,12 +153,18 @@ The source logo was not altered. `images/app-icon.png` and the Tauri platform ic
 - Serde-default launcher fields that preserve compatibility with existing settings and terminal definitions
 - External-launcher discovery from PATH and trusted stable install locations without executing candidate tools
 - Typed launcher validation and argument expansion, Windows/WSL path translation, Unity project/version resolution, and detached process creation
+- Native macOS zsh/bash/fish discovery, exact custom-shell validation, GUI login-PATH discovery, native path expansion, and missing-saved-cwd fallback notices
+- Unix PTY command construction for interactive/login native shells with the Windows ConPTY cursor handshake kept Windows-only
+- Finder and macOS `.app` discovery and detached launching, including exact Unity Hub editor-version resolution
+- Platform bootstrap data and macOS close, reopen, quit, and managed-process termination event handling
 
 ### Branding and release assets
 
 - Original logo retained at `images/logo.png`
 - Application icon generated at `images/app-icon.png`
 - Windows, macOS, iOS, and Android Tauri icon assets generated for future packaging compatibility
+- Apple Silicon macOS 0.2.0 configuration with native title-bar overlay, macOS 12 deployment target, ad-hoc signing, and `.app`/`.dmg` release output
+- Root macOS release helper with isolated artifacts and optional Developer ID signing/notarization driven only by external credentials
 
 ## 5. Important engineering discoveries
 
@@ -304,6 +317,47 @@ Resolution:
 - Resolve Unity projects and their exact editor version before process creation.
 - Consider only successful detached process creation part of Turtorge's responsibility; external application lifecycle remains outside the terminal registry.
 
+### macOS GUI applications need login-shell PATH discovery
+
+A Tauri application launched from Finder or the Dock does not inherit the interactive shell PATH. Relying only on the GUI process environment would make Homebrew-installed launchers and AI command-line tools appear unavailable.
+
+Resolution:
+
+- Read the configured macOS login shell and ask it for its login PATH without persisting the result.
+- Merge those directories into launcher discovery while continuing to pass native terminal startup through an interactive login shell.
+- Keep missing configured shell executables visible instead of silently substituting zsh or bash.
+
+### Finder is a LaunchServices operation, not an executable rename
+
+Replacing `explorer.exe` with `Finder.app` would not preserve the existing launcher contract. A terminal launcher targets a directory, while Finder application activation alone does not identify that directory.
+
+Resolution:
+
+- Model Finder as the built-in `/usr/bin/open` launcher with `{path}` as a separate argument.
+- Reserve `open -R` for a future reveal-file action; terminal working directories use plain `open {path}`.
+- Treat `.app` bundles as trusted program targets and launch them through `open -a`, while native executable launchers remain direct detached processes.
+
+### Non-interactive DMG builds cannot depend on Finder scripting
+
+The Tauri `.app` bundle completed successfully, but its generated DMG helper stalled and failed while asking Finder to arrange icons through AppleScript. The application, signature, and disk-image tooling were otherwise healthy.
+
+Resolution:
+
+- Build the `.app` through the Tauri CLI and construct the DMG from a staging directory with `hdiutil`.
+- Include the application and an `/Applications` symbolic link without relying on Finder cosmetic automation.
+- Verify the app signature and DMG checksum on every release-helper invocation.
+- Keep Developer ID signing and `notarytool` submission conditional on complete external credential sets.
+
+### A Rust target alone is not a Windows Tauri build environment
+
+Adding `x86_64-pc-windows-msvc` to rustup on macOS allowed dependency compilation to begin, but Tauri's Windows resource build correctly stopped because the host has no `llvm-rc`/Windows SDK resource toolchain. This is an environment boundary, not a Turtorge source failure.
+
+Resolution:
+
+- Do not describe a macOS cross-check as Windows native verification.
+- Run the Windows frontend, Rust, lint, and Tauri production-build gate on `windows-latest` through the checked-in GitHub Actions workflow.
+- Keep the macOS release target Apple Silicon-only and avoid installing an unrelated cross-compilation stack solely to imitate the Windows runner.
+
 ## 6. Verification history
 
 The completed MVP passed:
@@ -423,6 +477,43 @@ The 2026-08-08 documentation and macOS handoff audit additionally confirmed:
 - The repository pins pnpm 11.9.0 but not Node.js, Rust, or Xcode versions. Tool activation and dependency-install failures must be distinguished from application test failures in future handoffs.
 - `docs/MACOS_HANDOFF.md` now defines the evidence to record, the scope decision required before implementation, and the existing non-negotiable product boundaries.
 
+The Apple Silicon macOS 0.2.0 implementation additionally passed:
+
+- Frontend Vitest: 44/44 tests, including native terminal creation and macOS title-bar behavior
+- Rust default suite: 22 passed with the real native-shell PTY test ignored by default
+- Opt-in real native zsh and bash PTY integration test, including login environment, input/output, and clean exit
+- Rust formatting and Clippy with `-D warnings`
+- TypeScript compilation and Vite production build
+- Apple Silicon Tauri `.app` production build with macOS 12 as the minimum system version and an ad-hoc signature that passes `codesign --verify --deep --strict`
+- Isolated `.dmg` creation, checksum verification, read-only mount, signed application validation, and `/Applications` link validation
+- LaunchServices startup as a foreground application with the main arm64 process and WebView helper processes running without crash or fault logs
+- Local macOS-mode UI acceptance for Command shortcut labels, native title-bar spacing, workspace creation, native/custom shell fields, Finder selection, `.app` launcher editing, and terminal startup; the browser console remained free of warnings and errors
+- A Windows GitHub Actions regression gate covering frontend tests/build, Rust format/test/Clippy, and a Tauri Windows production build; execution begins after the changes are pushed
+
+The macOS terminal-input compatibility follow-up additionally passed:
+
+- A deterministic regression reproduced the Finder/GUI launch condition in which the native child command inherited `TERM=dumb` instead of the xterm-compatible capabilities rendered by Turtorge
+- Native macOS child processes now receive application-owned `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=Turtorge`, and the current package version after user environment merging
+- Frontend byte-preservation coverage for Up, Down, Backspace/Delete, and forward Delete control sequences
+- Frontend Vitest: 45/45 tests
+- Rust default suite: 23 passed with 2 real native-shell PTY tests ignored by default
+- Opt-in real zsh PTY coverage for previous/next history navigation, Backspace/Delete, forward Delete, cursor movement, login environment, input/output, and clean exit
+- Rust formatting and Clippy with `-D warnings`, TypeScript compilation, Vite production build, ad-hoc application signature verification, and DMG checksum verification
+
+Reusable lesson: a macOS application launched through Finder or LaunchServices does not have a trustworthy terminal environment. PTY hosts must advertise the capabilities of their own renderer explicitly instead of inheriting `TERM` or allowing workspace variables to replace it. Existing terminals must be restarted before a corrected child environment takes effect.
+
+The macOS force-restart and native-title-bar alignment follow-up additionally passed:
+
+- A real `TerminalManager` regression reproduced Force Restart writing `exit\r` into the PTY, where it appeared as terminal output instead of being a process-lifecycle operation
+- Terminal close now signals the managed child directly, waits up to two seconds for the waiter to confirm exit, reports a visible termination failure on timeout, and never injects a shell command
+- A foreground-process regression confirms that close returns only after the old process stops producing output
+- A new runtime generation resets the retained xterm emulator, clears stale runtime and queued-input references, and starts with a fresh screen instead of stacking new output over the prior process
+- Native screenshot measurement found the macOS traffic lights approximately five logical pixels above the 40 px custom title-bar center; the overlay inset changed from `y: 13` to `y: 18` and a newly built bundle was visually reaccepted at the centered position
+- Frontend Vitest: 47/47 tests; Rust default suite: 23 passed with 4 real native PTY/process tests ignored by default; all 4 opt-in tests passed when explicitly enabled
+- Rust formatting and Clippy with `-D warnings`, TypeScript compilation, Vite production build, ad-hoc application signature verification, and DMG checksum verification
+
+Reusable lesson: terminal shutdown is a process-control operation and must never be simulated by writing commands to the PTY. A forced restart also changes emulator identity even when the saved terminal definition is unchanged, so the runtime generation owns xterm reset and pending-input cleanup.
+
 ## 7. Delivery state
 
 The first complete project commit is:
@@ -463,12 +554,14 @@ The root `build-latest.bat` script synchronizes locked pnpm dependencies, then b
 
 The 2026-08-04 persistent TUI-rendering fix was built at `artifacts/2026-08-04_23-12-18_596/release/turtorge.exe`. Its SHA-256 is `383A6AC5AE63867F29E75542AFC1A7F52DEC8223EC6A659131F3B62BBF0DF10B`; native Claude Code and k9s acceptance remains pending.
 
+The current verified Apple Silicon macOS 0.2.0 artifacts are `artifacts/2026-08-08_06-10-31/release/bundle/macos/Turtorge.app` and `artifacts/2026-08-08_06-10-31/release/bundle/dmg/Turtorge_0.2.0_aarch64.dmg`. They supersede the earlier builds with the native terminal-capability, Force Restart, fresh-emulator, and centered traffic-light fixes. The DMG SHA-256 is `3ee503a9ec32091de8a65688ab4009ba1894842e9dd9d6aec2082dedb491874d`; the bundled arm64 executable SHA-256 is `ba9e18000dcaae7a5241ae23227179b6028b702f7e25932d361df3a6c635494b`. The current machine has no Developer ID identity or complete Xcode installation, so these artifacts are ad-hoc signed. The same helper accepts an externally supplied signing identity and complete Apple API-key, Apple-ID, or stored-keychain notarization credentials without committing secrets.
+
 ## 8. Deferred scope
 
 The following work was deliberately excluded from this MVP:
 
-- Installer packaging, signing, and auto-update
-- macOS and Linux native builds
+- Windows installer packaging and signing, macOS Developer ID credentials, and auto-update
+- Linux native builds
 - `.turtorge.yml` manifest import/export and repository trust flow
 - Tags, groups, and the full workspace management surface
 - Settings areas beyond the implemented appearance and launcher-profile controls
@@ -490,5 +583,5 @@ Before beginning the next phase:
 3. Preserve Rust ownership of PTY/process/storage responsibilities.
 4. Preserve in-app terminal tabs and layouts; do not open external console windows.
 5. Keep terminal content out of persistent logs and storage.
-6. Run the default test matrix and the opt-in real WSL PTY test after terminal-layer changes.
+6. Run the default test matrix and the platform-appropriate opt-in real WSL or native macOS PTY test after terminal-layer changes.
 7. Update this history when a phase is completed or a major architectural decision changes.

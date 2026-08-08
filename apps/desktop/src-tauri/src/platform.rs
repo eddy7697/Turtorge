@@ -1,6 +1,7 @@
 use crate::error::TurtorgeError;
 use crate::models::{
-    PathKind, ShellKind, ShellProfile, WorkspacePath, WslDistribution, WslShellDetection,
+    DesktopPlatform, PathKind, ShellKind, ShellProfile, WorkspacePath, WslDistribution,
+    WslShellDetection,
 };
 use semver::Version;
 use std::collections::HashSet;
@@ -19,6 +20,21 @@ pub struct ResolvedWslWorkingDirectory {
     pub used_home_fallback: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedNativeWorkingDirectory {
+    pub path: PathBuf,
+    pub used_home_fallback: bool,
+}
+
+pub fn current_platform() -> DesktopPlatform {
+    #[cfg(target_os = "windows")]
+    return DesktopPlatform::Windows;
+    #[cfg(target_os = "macos")]
+    return DesktopPlatform::Macos;
+    #[cfg(target_os = "linux")]
+    return DesktopPlatform::Linux;
+}
+
 fn command_output(mut command: Command) -> Result<Output, TurtorgeError> {
     configure_background_command(&mut command);
     command
@@ -33,9 +49,9 @@ pub(crate) fn background_command_status(mut command: Command) -> Result<ExitStat
         .map_err(|error| TurtorgeError::Platform(error.to_string()))
 }
 
-fn configure_background_command(command: &mut Command) {
+fn configure_background_command(_command: &mut Command) {
     #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
+    _command.creation_flags(CREATE_NO_WINDOW);
 }
 
 pub fn decode_command_output(bytes: &[u8]) -> String {
@@ -185,6 +201,213 @@ fn normalize_version(version: &str) -> String {
     }
 }
 
+pub fn detect_native_shells() -> Vec<ShellProfile> {
+    #[cfg(not(unix))]
+    {
+        Vec::new()
+    }
+    #[cfg(unix)]
+    {
+        let default_shell = configured_login_shell();
+        let mut candidates = Vec::new();
+        if let Some(shell) = &default_shell {
+            candidates.push(shell.clone());
+        }
+        for path in [
+            "/bin/zsh",
+            "/bin/bash",
+            "/opt/homebrew/bin/fish",
+            "/usr/local/bin/fish",
+            "/usr/bin/fish",
+        ] {
+            candidates.push(PathBuf::from(path));
+        }
+        for name in ["zsh", "bash", "fish"] {
+            candidates.extend(path_candidates(name));
+        }
+
+        let mut seen = HashSet::new();
+        let mut shells = candidates
+            .into_iter()
+            .filter_map(|candidate| {
+                let canonical = candidate.canonicalize().ok()?;
+                if !is_executable_file(&canonical) || !seen.insert(canonical.clone()) {
+                    return None;
+                }
+                let shell_name = canonical.file_name()?.to_string_lossy().into_owned();
+                if !["zsh", "bash", "fish"].contains(&shell_name.as_str()) {
+                    return None;
+                }
+                let mut version_command = Command::new(&canonical);
+                version_command.arg("--version");
+                let version = command_output(version_command)
+                    .ok()
+                    .filter(|output| output.status.success())
+                    .map(|output| decode_command_output(&output.stdout).trim().to_owned())
+                    .filter(|value| !value.is_empty());
+                let is_default = default_shell
+                    .as_ref()
+                    .and_then(|path| path.canonicalize().ok())
+                    .is_some_and(|path| path == canonical);
+                Some((
+                    !is_default,
+                    ShellProfile {
+                        id: format!("native-{}-{}", shell_name, stable_path_id(&canonical)),
+                        name: format!(
+                            "{}{}",
+                            shell_name,
+                            if is_default { " (login shell)" } else { "" }
+                        ),
+                        kind: ShellKind::Native,
+                        executable: canonical.to_string_lossy().into_owned(),
+                        version,
+                        distribution: None,
+                        shell: Some(shell_name),
+                        login_shell: true,
+                        available: true,
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
+        shells.sort_by_key(|(not_default, _)| *not_default);
+        shells.into_iter().map(|(_, profile)| profile).collect()
+    }
+}
+
+#[cfg(unix)]
+fn stable_path_id(path: &Path) -> String {
+    path.to_string_lossy()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn path_candidates(program: &str) -> Vec<PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join(program))
+        .collect()
+}
+
+#[cfg(unix)]
+fn configured_login_shell() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    if let Some(user) = std::env::var_os("USER") {
+        let mut command = Command::new("/usr/bin/dscl");
+        command.args([
+            ".",
+            "-read",
+            &format!("/Users/{}", user.to_string_lossy()),
+            "UserShell",
+        ]);
+        if let Ok(output) = command_output(command)
+            && output.status.success()
+            && let Some(value) = decode_command_output(&output.stdout)
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("UserShell:").map(str::trim))
+            && !value.is_empty()
+        {
+            return Some(PathBuf::from(value));
+        }
+    }
+    std::env::var_os("SHELL").map(PathBuf::from)
+}
+
+pub fn login_shell_path_entries() -> Vec<PathBuf> {
+    #[cfg(not(unix))]
+    {
+        Vec::new()
+    }
+    #[cfg(unix)]
+    {
+        let Some(shell) = configured_login_shell().filter(|path| is_executable_file(path)) else {
+            return Vec::new();
+        };
+        let mut command = Command::new(shell);
+        command.args(["-l", "-c", "printf '%s' \"$PATH\""]);
+        let Ok(output) = command_output(command) else {
+            return Vec::new();
+        };
+        if !output.status.success() {
+            return Vec::new();
+        }
+        std::env::split_paths(std::ffi::OsStr::new(
+            decode_command_output(&output.stdout).trim(),
+        ))
+        .collect()
+    }
+}
+
+pub fn validate_shell_executable(executable: &str) -> bool {
+    let path = Path::new(executable.trim());
+    is_executable_file(path)
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+pub fn resolve_native_working_directory_with_fallback(
+    path: &WorkspacePath,
+) -> Result<ResolvedNativeWorkingDirectory, TurtorgeError> {
+    if path.kind != PathKind::Native {
+        return Err(TurtorgeError::InvalidWorkingDirectory(path.value.clone()));
+    }
+    let configured = expand_native_home_path(&path.value)?;
+    if configured.is_dir() {
+        return Ok(ResolvedNativeWorkingDirectory {
+            path: configured,
+            used_home_fallback: false,
+        });
+    }
+    let home = native_home_directory()?;
+    if !home.is_dir() {
+        return Err(TurtorgeError::InvalidWorkingDirectory(
+            "The macOS home directory is unavailable".to_owned(),
+        ));
+    }
+    Ok(ResolvedNativeWorkingDirectory {
+        path: home,
+        used_home_fallback: true,
+    })
+}
+
+fn native_home_directory() -> Result<PathBuf, TurtorgeError> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| TurtorgeError::Platform("The user home directory is unavailable".to_owned()))
+}
+
+fn expand_native_home_path(path: &str) -> Result<PathBuf, TurtorgeError> {
+    if path == "~" {
+        return native_home_directory();
+    }
+    if let Some(relative) = path.strip_prefix("~/") {
+        return Ok(native_home_directory()?.join(relative));
+    }
+    Ok(PathBuf::from(path))
+}
+
 pub fn list_wsl_distributions() -> Result<Vec<WslDistribution>, TurtorgeError> {
     let mut command = Command::new("wsl.exe");
     command.args(["--list", "--verbose"]);
@@ -301,6 +524,7 @@ fn ensure_known_distribution(distribution: &str) -> Result<(), TurtorgeError> {
 pub fn validate_workspace_path(path: &WorkspacePath) -> Result<bool, TurtorgeError> {
     match path.kind {
         PathKind::Windows => Ok(Path::new(&path.value).is_dir()),
+        PathKind::Native => Ok(expand_native_home_path(&path.value)?.is_dir()),
         PathKind::Wsl => {
             let distribution = path.distribution.as_deref().ok_or_else(|| {
                 TurtorgeError::Validation("WSL path requires a distribution".to_owned())
@@ -373,6 +597,7 @@ pub fn resolve_wsl_working_directory(
             }
             Ok(decode_command_output(&output.stdout).trim().to_owned())
         }
+        PathKind::Native => Err(TurtorgeError::InvalidWorkingDirectory(path.value.clone())),
     }
 }
 
@@ -504,5 +729,33 @@ mod tests {
             r"\\wsl.localhost\Ubuntu-24.04\home\dev\project"
         );
         assert!(wsl_path_to_unc("relative", "Ubuntu-24.04").is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn detects_native_login_shells_and_validates_executables() {
+        assert_eq!(current_platform(), DesktopPlatform::Macos);
+        let shells = detect_native_shells();
+        assert!(shells.iter().any(|shell| shell.executable == "/bin/zsh"));
+        assert!(shells.iter().any(|shell| shell.executable == "/bin/bash"));
+        assert!(shells.iter().all(|shell| shell.kind == ShellKind::Native));
+        assert!(validate_shell_executable("/bin/zsh"));
+        assert!(!validate_shell_executable("/tmp/turtorge-missing-shell"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn missing_saved_native_directory_falls_back_to_home() {
+        let resolved = resolve_native_working_directory_with_fallback(&WorkspacePath {
+            kind: PathKind::Native,
+            value: "/tmp/turtorge-directory-that-does-not-exist".to_owned(),
+            distribution: None,
+        })
+        .expect("the user home directory should be available");
+        assert!(resolved.used_home_fallback);
+        assert_eq!(
+            resolved.path,
+            PathBuf::from(std::env::var_os("HOME").unwrap())
+        );
     }
 }

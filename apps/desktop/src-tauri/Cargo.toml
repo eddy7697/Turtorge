@@ -1,6 +1,6 @@
 [package]
 name = "turtorge"
-version = "0.1.0"
+version = "0.2.0"
 description = "Workspace-first terminal manager for AI-native developers"
 authors = ["Turtorge"]
 edition = "2024"
@@ -32,4 +32,3 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
-

@@ -3,6 +3,7 @@ import * as api from "../lib/api";
 import type {
   ApiError,
   AppSettings,
+  DesktopPlatform,
   LauncherProfileStatus,
   ShellProfile,
   TerminalRuntimeSnapshot,
@@ -17,7 +18,9 @@ interface AppStore {
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
   settings: AppSettings;
+  platform: DesktopPlatform;
   windowsShells: ShellProfile[];
+  nativeShells: ShellProfile[];
   wslDistributions: WslDistribution[];
   launcherProfiles: LauncherProfileStatus[];
   runtimes: Record<string, TerminalRuntimeSnapshot>;
@@ -58,7 +61,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   workspaces: [],
   activeWorkspaceId: null,
   settings: defaultSettings,
+  platform: "windows",
   windowsShells: [],
+  nativeShells: [],
   wslDistributions: [],
   launcherProfiles: [],
   runtimes: {},
@@ -89,7 +94,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         loading: false,
         workspaces: payload.workspaces,
         settings: payload.settings,
+        platform: payload.platform,
         windowsShells: payload.windowsShells,
+        nativeShells: payload.nativeShells,
         wslDistributions: payload.wslDistributions,
         launcherProfiles: payload.launcherProfiles,
         activeWorkspaceId,

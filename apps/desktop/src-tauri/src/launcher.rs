@@ -92,7 +92,8 @@ pub fn open(
     if profile.id == "builtin-unity" {
         if request.path.kind == PathKind::Wsl {
             return Err(TurtorgeError::LauncherUnavailable(
-                "Unity projects can only be opened from Windows paths in this version.".to_owned(),
+                "Unity projects cannot be opened directly from WSL paths in this version."
+                    .to_owned(),
             ));
         }
         let version = context.unity_version.as_deref().ok_or_else(|| {
@@ -128,7 +129,7 @@ pub fn open(
         &profile.arguments
     };
     let arguments = expand_arguments(templates, &context)?;
-    spawn_detached(&program, &arguments)?;
+    spawn_detached(&program, &arguments, profile.id == "builtin-unity")?;
 
     Ok(LauncherLaunchResult {
         profile_id: profile.id,
@@ -198,8 +199,15 @@ fn validate_profile_definition(profile: &LauncherProfile) -> Vec<String> {
         .to_ascii_lowercase();
     if extension == "ps1" {
         errors.push("PowerShell scripts (.ps1) are not supported as launchers.".to_owned());
-    } else if !extension.is_empty() && !["exe", "com", "cmd", "bat"].contains(&extension.as_str()) {
-        errors.push("Program must resolve to an .exe, .com, .cmd, or .bat file.".to_owned());
+    }
+    #[cfg(windows)]
+    {
+        if extension != "ps1"
+            && !extension.is_empty()
+            && !["exe", "com", "cmd", "bat"].contains(&extension.as_str())
+        {
+            errors.push("Program must resolve to an .exe, .com, .cmd, or .bat file.".to_owned());
+        }
     }
     errors
 }
@@ -220,7 +228,7 @@ fn extract_placeholders(value: &str) -> Vec<String> {
 
 #[derive(Debug)]
 struct PathContext {
-    windows_path: String,
+    platform_path: String,
     wsl_path: Option<String>,
     distribution: Option<String>,
     project_root: Option<String>,
@@ -238,7 +246,7 @@ fn resolve_path_context(path: &WorkspacePath) -> Result<PathContext, TurtorgeErr
                 find_project_root(&directory).map(|root| root.to_string_lossy().into_owned());
             let unity_version = project_root.as_deref().and_then(read_unity_project_version);
             Ok(PathContext {
-                windows_path: directory.to_string_lossy().into_owned(),
+                platform_path: directory.to_string_lossy().into_owned(),
                 wsl_path: None,
                 distribution: None,
                 project_root,
@@ -261,14 +269,44 @@ fn resolve_path_context(path: &WorkspacePath) -> Result<PathContext, TurtorgeErr
             let project_root = find_project_root(Path::new(&windows_path))
                 .map(|root| root.to_string_lossy().into_owned());
             Ok(PathContext {
-                windows_path,
+                platform_path: windows_path,
                 wsl_path: Some(wsl_path),
                 distribution: Some(distribution.to_owned()),
                 project_root,
                 unity_version: None,
             })
         }
+        PathKind::Native => {
+            let directory = expand_native_path(path.value.trim())?;
+            if !directory.is_dir() {
+                return Err(TurtorgeError::InvalidWorkingDirectory(path.value.clone()));
+            }
+            let project_root =
+                find_project_root(&directory).map(|root| root.to_string_lossy().into_owned());
+            let unity_version = project_root.as_deref().and_then(read_unity_project_version);
+            Ok(PathContext {
+                platform_path: directory.to_string_lossy().into_owned(),
+                wsl_path: None,
+                distribution: None,
+                project_root,
+                unity_version,
+            })
+        }
     }
+}
+
+fn expand_native_path(value: &str) -> Result<PathBuf, TurtorgeError> {
+    if value == "~" || value.starts_with("~/") {
+        let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| {
+            TurtorgeError::Platform("The user home directory is unavailable".to_owned())
+        })?;
+        return Ok(if value == "~" {
+            home
+        } else {
+            home.join(value.trim_start_matches("~/"))
+        });
+    }
+    Ok(PathBuf::from(value))
 }
 
 fn expand_arguments(
@@ -278,7 +316,7 @@ fn expand_arguments(
     templates
         .iter()
         .map(|template| {
-            let mut value = template.replace("{path}", &context.windows_path);
+            let mut value = template.replace("{path}", &context.platform_path);
             if value.contains("{wslPath}") {
                 let wsl_path = context.wsl_path.as_deref().ok_or_else(|| {
                     TurtorgeError::Validation(
@@ -350,7 +388,7 @@ fn resolve_profile_program(
     match profile.detection_mode {
         LauncherDetectionMode::Manual => {
             let path = PathBuf::from(profile.program.trim());
-            path.is_file().then_some(path)
+            program_exists(&path).then_some(path)
         }
         LauncherDetectionMode::Auto => auto_detect_program(profile),
     }
@@ -358,7 +396,7 @@ fn resolve_profile_program(
 
 fn auto_detect_program(profile: &LauncherProfile) -> Option<PathBuf> {
     let configured = PathBuf::from(profile.program.trim());
-    if configured.components().count() > 1 && configured.is_file() {
+    if configured.components().count() > 1 && program_exists(&configured) {
         return Some(configured);
     }
 
@@ -367,10 +405,19 @@ fn auto_detect_program(profile: &LauncherProfile) -> Option<PathBuf> {
     let mut seen = HashSet::new();
     candidates.into_iter().find(|candidate| {
         let key = candidate.to_string_lossy().to_ascii_lowercase();
-        seen.insert(key) && candidate.is_file()
+        seen.insert(key) && program_exists(candidate)
     })
 }
 
+fn program_exists(path: &Path) -> bool {
+    path.is_file()
+        || path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("app") && path.is_dir())
+}
+
+#[cfg(windows)]
 fn path_candidates(program: &str) -> Vec<PathBuf> {
     let configured = Path::new(program);
     let has_extension = configured.extension().is_some();
@@ -395,6 +442,20 @@ fn path_candidates(program: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+#[cfg(not(windows))]
+fn path_candidates(program: &str) -> Vec<PathBuf> {
+    let mut directories =
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect::<Vec<_>>();
+    directories.extend(platform::login_shell_path_entries());
+    let mut seen = HashSet::new();
+    directories
+        .into_iter()
+        .filter(|directory| seen.insert(directory.clone()))
+        .map(|directory| directory.join(program))
+        .collect()
+}
+
+#[cfg(windows)]
 fn known_candidates(profile_id: &str) -> Vec<PathBuf> {
     let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
     let program_files = std::env::var_os("ProgramFiles").map(PathBuf::from);
@@ -444,6 +505,7 @@ fn known_candidates(profile_id: &str) -> Vec<PathBuf> {
     candidates
 }
 
+#[cfg(windows)]
 fn jetbrains_candidates(product_prefix: &str, executable: &str) -> Vec<PathBuf> {
     let Some(program_files) = std::env::var_os("ProgramFiles") else {
         return Vec::new();
@@ -465,6 +527,7 @@ fn jetbrains_candidates(product_prefix: &str, executable: &str) -> Vec<PathBuf> 
     paths
 }
 
+#[cfg(windows)]
 fn installed_unity_editors() -> BTreeMap<String, PathBuf> {
     let Some(program_files) = std::env::var_os("ProgramFiles") else {
         return BTreeMap::new();
@@ -483,11 +546,112 @@ fn installed_unity_editors() -> BTreeMap<String, PathBuf> {
         .collect()
 }
 
+#[cfg(target_os = "macos")]
+fn known_candidates(profile_id: &str) -> Vec<PathBuf> {
+    let names: &[&str] = match profile_id {
+        "builtin-finder" => return vec![PathBuf::from("/usr/bin/open")],
+        "builtin-vscode" => &["Visual Studio Code.app"],
+        "builtin-cursor" => &["Cursor.app"],
+        "builtin-antigravity" => &["Antigravity.app"],
+        "builtin-zed" => &["Zed.app"],
+        "builtin-intellij" => &["IntelliJ IDEA.app", "IntelliJ IDEA CE.app"],
+        "builtin-rider" => &["Rider.app"],
+        "builtin-webstorm" => &["WebStorm.app"],
+        "builtin-pycharm" => &["PyCharm.app", "PyCharm CE.app"],
+        "builtin-unity" => return installed_unity_editors().into_values().collect(),
+        _ => &[],
+    };
+    mac_application_candidates(names)
+}
+
+#[cfg(target_os = "macos")]
+fn mac_application_candidates(names: &[&str]) -> Vec<PathBuf> {
+    let mut roots = vec![PathBuf::from("/Applications")];
+    let mut toolbox_root = None;
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        roots.push(home.join("Applications"));
+        toolbox_root = Some(home.join("Library/Application Support/JetBrains/Toolbox/apps"));
+    }
+    let mut candidates = roots
+        .iter()
+        .flat_map(|root| names.iter().map(move |name| root.join(name)))
+        .collect::<Vec<_>>();
+    if let Some(root) = toolbox_root {
+        collect_matching_app_bundles(&root, names, 0, 6, &mut candidates);
+    }
+    candidates
+}
+
+#[cfg(target_os = "macos")]
+fn collect_matching_app_bundles(
+    root: &Path,
+    names: &[&str],
+    depth: usize,
+    max_depth: usize,
+    output: &mut Vec<PathBuf>,
+) {
+    if depth > max_depth || !root.is_dir() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if names
+            .iter()
+            .any(|name| file_name.eq_ignore_ascii_case(name))
+        {
+            output.push(path.clone());
+        }
+        if path.is_dir()
+            && !path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
+        {
+            collect_matching_app_bundles(&path, names, depth + 1, max_depth, output);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn installed_unity_editors() -> BTreeMap<String, PathBuf> {
+    let root = PathBuf::from("/Applications/Unity/Hub/Editor");
+    std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let bundle = entry.path().join("Unity.app");
+            bundle
+                .is_dir()
+                .then(|| (entry.file_name().to_string_lossy().into_owned(), bundle))
+        })
+        .collect()
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn known_candidates(_profile_id: &str) -> Vec<PathBuf> {
+    Vec::new()
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn installed_unity_editors() -> BTreeMap<String, PathBuf> {
+    BTreeMap::new()
+}
+
 fn find_exact_unity_editor(version: &str) -> Option<PathBuf> {
     installed_unity_editors().remove(version)
 }
 
-fn spawn_detached(program: &Path, arguments: &[String]) -> Result<(), TurtorgeError> {
+#[cfg(windows)]
+fn spawn_detached(
+    program: &Path,
+    arguments: &[String],
+    _pass_as_app_arguments: bool,
+) -> Result<(), TurtorgeError> {
     let extension = program
         .extension()
         .and_then(|value| value.to_str())
@@ -528,6 +692,47 @@ fn spawn_detached(program: &Path, arguments: &[String]) -> Result<(), TurtorgeEr
         .map_err(|error| TurtorgeError::LauncherFailed(error.to_string()))
 }
 
+#[cfg(not(windows))]
+fn spawn_detached(
+    program: &Path,
+    arguments: &[String],
+    pass_as_app_arguments: bool,
+) -> Result<(), TurtorgeError> {
+    use std::os::unix::process::CommandExt;
+
+    let is_app_bundle = program
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("app"));
+    let mut command = if is_app_bundle && program.is_dir() {
+        let mut command = Command::new("/usr/bin/open");
+        command.arg("-a").arg(program);
+        if pass_as_app_arguments {
+            command.arg("--args");
+        }
+        command.args(arguments);
+        command
+    } else if platform::validate_shell_executable(&program.to_string_lossy()) {
+        let mut command = Command::new(program);
+        command.args(arguments);
+        command
+    } else {
+        return Err(TurtorgeError::Validation(
+            "Launcher must resolve to an executable file or a macOS .app bundle.".to_owned(),
+        ));
+    };
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| TurtorgeError::LauncherFailed(error.to_string()))
+}
+
+#[cfg(any(windows, test))]
 fn build_cmd_command_line(program: &Path, arguments: &[String]) -> Result<String, TurtorgeError> {
     let values = std::iter::once(program.to_string_lossy().into_owned())
         .chain(arguments.iter().cloned())
@@ -548,6 +753,7 @@ fn build_cmd_command_line(program: &Path, arguments: &[String]) -> Result<String
         .join(" "))
 }
 
+#[cfg(windows)]
 fn built_in_profiles() -> Vec<LauncherProfile> {
     vec![
         built_in(
@@ -633,6 +839,97 @@ fn built_in_profiles() -> Vec<LauncherProfile> {
     ]
 }
 
+#[cfg(target_os = "macos")]
+fn built_in_profiles() -> Vec<LauncherProfile> {
+    vec![
+        built_in(
+            "builtin-finder",
+            "Finder",
+            "/usr/bin/open",
+            vec!["{path}"],
+            None,
+            LauncherIcon::Finder,
+        ),
+        built_in(
+            "builtin-vscode",
+            "Visual Studio Code",
+            "Visual Studio Code.app",
+            vec!["{path}"],
+            None,
+            LauncherIcon::VsCode,
+        ),
+        built_in(
+            "builtin-cursor",
+            "Cursor",
+            "Cursor.app",
+            vec!["{path}"],
+            None,
+            LauncherIcon::Cursor,
+        ),
+        built_in(
+            "builtin-antigravity",
+            "Antigravity",
+            "Antigravity.app",
+            vec!["{path}"],
+            None,
+            LauncherIcon::Antigravity,
+        ),
+        built_in(
+            "builtin-zed",
+            "Zed",
+            "Zed.app",
+            vec!["{path}"],
+            None,
+            LauncherIcon::Zed,
+        ),
+        built_in(
+            "builtin-intellij",
+            "IntelliJ IDEA",
+            "IntelliJ IDEA.app",
+            vec!["{path}"],
+            None,
+            LauncherIcon::IntelliJ,
+        ),
+        built_in(
+            "builtin-rider",
+            "JetBrains Rider",
+            "Rider.app",
+            vec!["{path}"],
+            None,
+            LauncherIcon::Rider,
+        ),
+        built_in(
+            "builtin-webstorm",
+            "WebStorm",
+            "WebStorm.app",
+            vec!["{path}"],
+            None,
+            LauncherIcon::WebStorm,
+        ),
+        built_in(
+            "builtin-pycharm",
+            "PyCharm",
+            "PyCharm.app",
+            vec!["{path}"],
+            None,
+            LauncherIcon::PyCharm,
+        ),
+        built_in(
+            "builtin-unity",
+            "Unity",
+            "Unity.app",
+            vec!["-projectPath", "{projectRoot}"],
+            None,
+            LauncherIcon::Unity,
+        ),
+    ]
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn built_in_profiles() -> Vec<LauncherProfile> {
+    Vec::new()
+}
+
 fn built_in(
     id: &str,
     name: &str,
@@ -690,7 +987,7 @@ mod tests {
     #[test]
     fn expands_windows_path_arguments_without_a_shell() {
         let context = PathContext {
-            windows_path: r"C:\Projects\A & B".to_owned(),
+            platform_path: r"C:\Projects\A & B".to_owned(),
             wsl_path: None,
             distribution: None,
             project_root: Some(r"C:\Projects\A & B".to_owned()),
@@ -705,7 +1002,7 @@ mod tests {
     #[test]
     fn expands_wsl_remote_arguments() {
         let context = PathContext {
-            windows_path: r"\\wsl.localhost\Ubuntu\home\dev\app".to_owned(),
+            platform_path: r"\\wsl.localhost\Ubuntu\home\dev\app".to_owned(),
             wsl_path: Some("/home/dev/app".to_owned()),
             distribution: Some("Ubuntu".to_owned()),
             project_root: None,
@@ -734,6 +1031,23 @@ mod tests {
             )
             .unwrap(),
             r#""C:\Program Files\tool.cmd" "C:\Projects\A & B""#
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_built_ins_use_finder_and_application_bundles() {
+        let profiles = built_in_profiles();
+        let finder = profiles
+            .iter()
+            .find(|profile| profile.id == "builtin-finder")
+            .expect("Finder should be built in on macOS");
+        assert_eq!(finder.program, "/usr/bin/open");
+        assert_eq!(finder.arguments, vec!["{path}"]);
+        assert!(
+            profiles
+                .iter()
+                .any(|profile| profile.program.ends_with(".app"))
         );
     }
 }

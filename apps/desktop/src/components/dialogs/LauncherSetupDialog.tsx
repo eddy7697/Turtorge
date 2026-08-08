@@ -12,7 +12,7 @@ export function LauncherSetupDialog({ launcherProfiles, path, onSaveAndOpen, onM
   onClose: () => void;
 }) {
   const availableDefault = useMemo(
-    () => launcherProfiles.find(({ profile, available }) => profile.id === "builtin-explorer" && available)
+    () => launcherProfiles.find(({ profile, available }) => ["builtin-finder", "builtin-explorer"].includes(profile.id) && available)
       ?? launcherProfiles.find(({ available }) => available),
     [launcherProfiles],
   );

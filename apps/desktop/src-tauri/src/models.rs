@@ -48,6 +48,7 @@ pub enum LauncherDetectionMode {
 #[serde(rename_all = "camelCase")]
 pub enum LauncherIcon {
     Explorer,
+    Finder,
     VsCode,
     Cursor,
     Antigravity,
@@ -114,6 +115,7 @@ pub struct LauncherValidationResult {
 pub enum PathKind {
     Windows,
     Wsl,
+    Native,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -129,6 +131,15 @@ pub struct WorkspacePath {
 pub enum ShellKind {
     PowerShell,
     Wsl,
+    Native,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DesktopPlatform {
+    Windows,
+    Macos,
+    Linux,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -244,9 +255,11 @@ pub struct WslShellDetection {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BootstrapPayload {
+    pub platform: DesktopPlatform,
     pub workspaces: Vec<Workspace>,
     pub settings: AppSettings,
     pub windows_shells: Vec<ShellProfile>,
+    pub native_shells: Vec<ShellProfile>,
     pub wsl_distributions: Vec<WslDistribution>,
     pub launcher_profiles: Vec<LauncherProfileStatus>,
 }
@@ -314,7 +327,10 @@ pub fn merge_environment(
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, LayoutNode, TerminalDefinition, TerminalEvent};
+    use super::{
+        AppSettings, DesktopPlatform, LayoutNode, PathKind, ShellKind, TerminalDefinition,
+        TerminalEvent,
+    };
 
     #[test]
     fn layout_node_accepts_camel_case_pane_fields() {
@@ -407,5 +423,15 @@ mod tests {
         .expect("legacy terminal should load");
 
         assert!(terminal.launcher_profile_id.is_none());
+    }
+
+    #[test]
+    fn macos_platform_and_native_variants_use_stable_wire_names() {
+        assert_eq!(
+            serde_json::to_value(DesktopPlatform::Macos).unwrap(),
+            "macos"
+        );
+        assert_eq!(serde_json::to_value(PathKind::Native).unwrap(), "native");
+        assert_eq!(serde_json::to_value(ShellKind::Native).unwrap(), "native");
     }
 }

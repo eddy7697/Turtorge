@@ -35,7 +35,7 @@ Primary Platform
 
 Native macOS Support
 
-Status: not started; scope requires explicit approval before implementation.
+Status: Apple Silicon native application and delivery route completed; portability manifest remains deferred.
 
 目標：
 
@@ -49,7 +49,8 @@ Status: not started; scope requires explicit approval before implementation.
 - Homebrew Environment
 - Native Terminal Process
 - Apple Silicon
-- Intel Mac
+
+Intel Mac support is intentionally excluded from the approved target.
 
 Workspace Manifest
 
@@ -57,11 +58,11 @@ Workspace Manifest
 .turtorge.yml
 ```
 
-必須可完全跨平台。
+This manifest remains a future portability goal.
 
 Windows 建立的 Workspace 應能直接於 macOS 開啟。
 
-This remains a future goal. The `.turtorge.yml` manifest and cross-platform migration flow are not implemented in the current source. See `MACOS_HANDOFF.md` for the present blockers and required decisions.
+Native macOS shells, PTYs, Finder/application launchers, platform UI, lifecycle behavior, and Apple Silicon `.app`/`.dmg` packaging are implemented. The `.turtorge.yml` manifest and automatic cross-platform migration flow are not. See `MACOS_HANDOFF.md` for the implementation and release record.
 
 ---
 

@@ -8,6 +8,8 @@ mod terminal;
 
 use std::sync::Arc;
 use storage::Repository;
+#[cfg(target_os = "macos")]
+use tauri::Emitter;
 use tauri::Manager;
 use terminal::TerminalManager;
 use tracing_subscriber::EnvFilter;
@@ -25,7 +27,7 @@ pub fn run() {
         )
         .try_init();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_root = app
@@ -49,6 +51,8 @@ pub fn run() {
             commands::launcher_list_profiles,
             commands::launcher_open,
             commands::platform_detect_windows_shells,
+            commands::platform_detect_native_shells,
+            commands::platform_validate_shell,
             commands::platform_list_wsl_distributions,
             commands::platform_detect_wsl_shells,
             commands::platform_validate_path,
@@ -62,7 +66,32 @@ pub fn run() {
             commands::terminal_close,
             commands::terminal_list_runtime,
             commands::terminal_terminate_all,
+            commands::app_quit,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Turtorge");
+        .build(tauri::generate_context!())
+        .expect("error while building Turtorge");
+
+    app.run(|app_handle, event| {
+        #[cfg(target_os = "macos")]
+        match event {
+            tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } => {
+                api.prevent_exit();
+                let _ = app_handle.emit("turtorge://quit-requested", ());
+            }
+            tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } => {
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            _ => {}
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app_handle, event);
+    });
 }

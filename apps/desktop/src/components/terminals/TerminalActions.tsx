@@ -37,7 +37,9 @@ export function TerminalActions({
   const pendingConnections = useAppStore((state) => state.pendingConnections);
   const settings = useAppStore((state) => state.settings);
   const launcherProfiles = useAppStore((state) => state.launcherProfiles);
+  const platform = useAppStore((state) => state.platform);
   const windowsShells = useAppStore((state) => state.windowsShells);
+  const nativeShells = useAppStore((state) => state.nativeShells);
   const wslDistributions = useAppStore((state) => state.wslDistributions);
   const updateSettings = useAppStore((state) => state.updateSettings);
   const requestStart = useAppStore((state) => state.requestTerminalStart);
@@ -228,9 +230,11 @@ export function TerminalActions({
 
       {request?.kind === "edit" && target && (
         <EditTerminalDialog
+          platform={platform}
           definition={target.definition}
           workspace={target.workspace}
           windowsShells={windowsShells}
+          nativeShells={nativeShells}
           wslDistributions={wslDistributions}
           launcherProfiles={launcherProfiles}
           globalDefaultLauncherId={settings.defaultLauncherProfileId}
