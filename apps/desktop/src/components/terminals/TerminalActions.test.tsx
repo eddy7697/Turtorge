@@ -124,17 +124,56 @@ describe("TerminalActions", () => {
     await waitFor(() => expect(onRemove).toHaveBeenCalledWith(workspace, definition.id));
     expect(apiMocks.closeTerminal).not.toHaveBeenCalled();
   });
+
+  it("duplicates a terminal directly from the shared terminal menu", async () => {
+    const onRequestChange = vi.fn();
+    const onDuplicate = vi.fn().mockResolvedValue(undefined);
+    render(renderActions(menuRequest(), onRequestChange, undefined, onDuplicate));
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate Terminal" }));
+
+    await waitFor(() => expect(onDuplicate).toHaveBeenCalledWith(workspace.id, definition.id));
+    expect(onRequestChange).toHaveBeenCalledWith(null);
+  });
+
+  it("disables duplication when the terminal is not assigned to a pane", () => {
+    const orphanWorkspace: Workspace = {
+      ...workspace,
+      layout: { type: "pane", id: "pane-test", terminalIds: [], activeTerminalId: null },
+    };
+    render(renderActions(menuRequest(orphanWorkspace), vi.fn()));
+
+    const duplicate = screen.getByRole("menuitem", { name: /Duplicate Terminal/ }) as HTMLButtonElement;
+    expect(duplicate.disabled).toBe(true);
+    expect(duplicate.title).toBe("Terminal is not assigned to a pane.");
+  });
+
+  it("shows a readable error when the duplicate cannot be persisted", async () => {
+    const onDuplicate = vi.fn().mockRejectedValue(new Error("Workspace storage is unavailable."));
+    render(renderActions(menuRequest(), vi.fn(), undefined, onDuplicate));
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate Terminal" }));
+
+    expect(await screen.findByText("Couldn’t duplicate terminal")).toBeTruthy();
+    expect(screen.getByText("Workspace storage is unavailable.")).toBeTruthy();
+  });
 });
 
-function menuRequest(): TerminalActionRequest {
-  return { kind: "menu", target: { workspace, definition }, point: { x: 100, y: 80 } };
+function menuRequest(targetWorkspace = workspace): TerminalActionRequest {
+  return { kind: "menu", target: { workspace: targetWorkspace, definition }, point: { x: 100, y: 80 } };
 }
 
-function renderActions(request: TerminalActionRequest, onRequestChange: (request: TerminalActionRequest | null) => void, onRemove = vi.fn().mockResolvedValue(undefined)) {
+function renderActions(
+  request: TerminalActionRequest,
+  onRequestChange: (request: TerminalActionRequest | null) => void,
+  onRemove = vi.fn().mockResolvedValue(undefined),
+  onDuplicate = vi.fn().mockResolvedValue(undefined),
+) {
   return (
     <TerminalActions
       request={request}
       onRequestChange={onRequestChange}
+      onDuplicate={onDuplicate}
       onRename={vi.fn().mockResolvedValue(undefined)}
       onEdit={vi.fn().mockResolvedValue(undefined)}
       onRemove={onRemove}

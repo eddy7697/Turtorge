@@ -17,6 +17,17 @@ export function findPane(node: LayoutNode, paneId: string): PaneNode | undefined
   return findPane(node.first, paneId) ?? findPane(node.second, paneId);
 }
 
+export function findPaneForTerminal(
+  node: LayoutNode,
+  terminalId: string,
+): PaneNode | undefined {
+  if (node.type === "pane") {
+    return node.terminalIds.includes(terminalId) ? node : undefined;
+  }
+  return findPaneForTerminal(node.first, terminalId)
+    ?? findPaneForTerminal(node.second, terminalId);
+}
+
 export function mapPane(
   node: LayoutNode,
   paneId: string,
@@ -44,6 +55,25 @@ export function addTerminalToPane(
       : [...pane.terminalIds, terminalId],
     activeTerminalId: terminalId,
   }));
+}
+
+export function insertTerminalAfter(
+  node: LayoutNode,
+  sourceTerminalId: string,
+  terminalId: string,
+): LayoutNode {
+  if (node.type === "pane") {
+    const sourceIndex = node.terminalIds.indexOf(sourceTerminalId);
+    if (sourceIndex < 0 || node.terminalIds.includes(terminalId)) return node;
+    const terminalIds = [...node.terminalIds];
+    terminalIds.splice(sourceIndex + 1, 0, terminalId);
+    return { ...node, terminalIds, activeTerminalId: terminalId };
+  }
+
+  const first = insertTerminalAfter(node.first, sourceTerminalId, terminalId);
+  if (first !== node.first) return { ...node, first };
+  const second = insertTerminalAfter(node.second, sourceTerminalId, terminalId);
+  return second === node.second ? node : { ...node, second };
 }
 
 export function setActiveTerminal(

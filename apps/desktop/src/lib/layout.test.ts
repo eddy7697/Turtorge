@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   addTerminalToPane,
   createPane,
+  findPaneForTerminal,
+  insertTerminalAfter,
   moveTerminal,
   paneCount,
   removePaneFromLayout,
@@ -18,6 +20,34 @@ describe("layout tree", () => {
       expect(layout.terminalIds).toEqual(["terminal-a", "terminal-b"]);
       expect(layout.activeTerminalId).toBe("terminal-b");
     }
+  });
+
+  it("inserts a duplicate immediately after its source and selects it", () => {
+    const pane = { ...createPane(["terminal-a", "terminal-b"]), activeTerminalId: "terminal-a" };
+
+    const layout = insertTerminalAfter(pane, "terminal-a", "terminal-copy");
+
+    expect(layout.type).toBe("pane");
+    if (layout.type === "pane") {
+      expect(layout.terminalIds).toEqual(["terminal-a", "terminal-copy", "terminal-b"]);
+      expect(layout.activeTerminalId).toBe("terminal-copy");
+    }
+  });
+
+  it("finds the pane that owns a terminal and reports an orphan", () => {
+    const left = createPane(["terminal-a"]);
+    const right = createPane(["terminal-b"]);
+    const layout = {
+      type: "split" as const,
+      id: "split-root",
+      direction: "horizontal" as const,
+      ratio: 0.5,
+      first: left,
+      second: right,
+    };
+
+    expect(findPaneForTerminal(layout, "terminal-b")?.id).toBe(right.id);
+    expect(findPaneForTerminal(layout, "terminal-orphan")).toBeUndefined();
   });
 
   it("creates a nested split without moving existing tabs", () => {

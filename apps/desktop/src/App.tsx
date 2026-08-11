@@ -57,6 +57,7 @@ function TurtorgeApp() {
   const initialize = useAppStore((state) => state.initialize);
   const selectWorkspace = useAppStore((state) => state.selectWorkspace);
   const saveWorkspace = useAppStore((state) => state.saveWorkspace);
+  const duplicateTerminal = useAppStore((state) => state.duplicateTerminal);
   const deleteWorkspace = useAppStore((state) => state.deleteWorkspace);
   const updateSettings = useAppStore((state) => state.updateSettings);
   const toggleSidebar = useAppStore((state) => state.toggleSidebar);
@@ -331,7 +332,7 @@ function TurtorgeApp() {
         { type: "item", key: "rename-workspace", label: "Rename Workspace", icon: <Pencil size={14} />, onSelect: () => { setRenamingWorkspace(workspaceMenu.workspace); setWorkspaceMenu(null); } },
       ]} />}
       {renamingWorkspace && <RenameWorkspaceDialog workspace={renamingWorkspace} onSave={(name) => renameWorkspace(renamingWorkspace, name)} onClose={() => setRenamingWorkspace(null)} />}
-      <TerminalActions request={terminalActionRequest} onRequestChange={setTerminalActionRequest} onRename={renameTerminal} onEdit={editTerminal} onRemove={removeTerminal} onOpenLauncherSettings={() => setDialog("settings")} />
+      <TerminalActions request={terminalActionRequest} onRequestChange={setTerminalActionRequest} onDuplicate={async (workspaceId, terminalId) => { await duplicateTerminal(workspaceId, terminalId); }} onRename={renameTerminal} onEdit={editTerminal} onRemove={removeTerminal} onOpenLauncherSettings={() => setDialog("settings")} />
     </div>
   );
 }

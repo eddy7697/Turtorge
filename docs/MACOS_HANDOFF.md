@@ -1,8 +1,8 @@
 # macOS Handoff
 
 Status: implemented and locally verified for Apple Silicon
-Last reviewed: 2026-08-08
-Release version: 0.2.0
+Last reviewed: 2026-08-10
+Release version: 0.2.2
 
 Turtorge now has a native macOS 12+ route in the same codebase as the completed Windows MVP. The supported Mac target is Apple Silicon only. Intel/x86 and universal artifacts are intentionally excluded.
 
@@ -29,7 +29,10 @@ The macOS implementation provides:
 - macOS discovery and detached launch behavior for Visual Studio Code, Cursor, Antigravity, Zed, IntelliJ IDEA, Rider, WebStorm, PyCharm, and exact-version Unity editors;
 - vertically centered native traffic lights and title-bar overlay, Command-based shortcuts, close-to-hide behavior, Dock reopen, and confirmed Command+Q process termination;
 - independent macOS application-data storage with backward-compatible JSON parsing and no automatic Windows-to-Mac migration;
-- Apple Silicon `.app` and `.dmg` artifacts with macOS 12 as the minimum system version.
+- one-click terminal duplication from the shared tab/sidebar menu, using an independent saved definition and fresh PTY inserted immediately after its source;
+- xterm padding applied at the renderer element that FitAddon measures, keeping the final text row inside the clipped terminal surface across window and pane sizes;
+- Apple Silicon `.app` and `.dmg` artifacts with macOS 12 as the minimum system version;
+- an explicitly bundled turtle application icon resolved by macOS for Finder and Dock surfaces.
 
 WSL has no simulated macOS equivalent. SSH, Docker/container terminals, remote adapters, `.turtorge.yml` migration, auto-update, and Linux delivery remain separate future work.
 
@@ -42,7 +45,7 @@ WSL has no simulated macOS equivalent. SSH, Docker/container terminals, remote a
 - macOS: 12.0 or newer
 - architecture: `arm64` only
 
-The 2026-08-08 local release was built on Apple Silicon macOS 26.5.1. Command Line Tools were sufficient for compilation and ad-hoc `.app` packaging. A complete Xcode installation is required when `notarytool` is needed for Developer ID distribution.
+The current local release was built on Apple Silicon macOS 26.5.1. Command Line Tools were sufficient for compilation and ad-hoc `.app` packaging. A complete Xcode installation is required when `notarytool` is needed for Developer ID distribution.
 
 ## 4. Development and verification
 
@@ -64,11 +67,11 @@ cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- 
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml terminal::macos_integration_tests -- --ignored --nocapture
 ```
 
-The latest local verification passed 47 frontend tests, 23 default Rust tests, all 4 ignored native PTY/process tests when explicitly enabled, Rust formatting, Clippy with warnings denied, TypeScript compilation, and the Vite production build. The real zsh line-editor test covers previous/next history navigation, Backspace/Delete, forward Delete, cursor movement, and clean exit. Force-close tests cover command-free shutdown and a continuously emitting foreground process. Frontend coverage proves that xterm control sequences reach the Rust boundary byte-for-byte and that every restart generation resets the retained emulator.
+The latest local verification passed 56 frontend tests, 23 default Rust tests, all 4 ignored native PTY/process tests when explicitly enabled, Rust formatting, Clippy with warnings denied, TypeScript compilation, and the Vite production build. Duplicate Terminal coverage exercises adjacent insertion, orphan rejection, independent configuration, Copy numbering, the 80-character limit, inactive-workspace activation, persistence failure atomicity, the shared menu, and readable failures. The real zsh line-editor test covers previous/next history navigation, Backspace/Delete, forward Delete, cursor movement, and clean exit. Force-close tests cover command-free shutdown and a continuously emitting foreground process.
 
 Native child processes always receive `TERM=xterm-256color`, `COLORTERM=truecolor`, and Turtorge program metadata after user environment merging. This is application-owned capability data: GUI applications launched by Finder do not inherit a reliable `TERM`, and existing terminal processes must be restarted to receive a corrected environment.
 
-The release application was also accepted by LaunchServices as an Apple Silicon foreground app. Its main process and WebView helper processes stayed running without crash/fault logs, and the bundled executable, identifier, version, deployment target, and ad-hoc signature were inspected directly. A fresh-bundle screenshot confirmed that the native traffic-light center matches the 40 px custom title-bar center after changing the overlay inset from `y: 13` to `y: 18`.
+The 0.2.2 release bundle was inspected as an arm64 application with macOS 12 as its deployment target and an ad-hoc signature that satisfies strict verification. Its `Info.plist` names `icon.icns`, and the signed resources contain the same verified turtle artwork. Browser-mode acceptance using isolated mock data confirmed that terminal text layers remain inside the clipped surface at 1024×640, 1280×720, and 1440×900, including vertically split panes, with no console warnings or errors. Duplicate Terminal remains covered by the full frontend suite.
 
 ## 5. Release packaging
 
@@ -82,12 +85,12 @@ It creates an isolated target and produces:
 
 ```text
 artifacts/YYYY-MM-DD_HH-MM-SS/release/bundle/macos/Turtorge.app
-artifacts/YYYY-MM-DD_HH-MM-SS/release/bundle/dmg/Turtorge_0.2.0_aarch64.dmg
+artifacts/YYYY-MM-DD_HH-MM-SS/release/bundle/dmg/Turtorge_0.2.2_aarch64.dmg
 ```
 
 The application is ad-hoc signed when no Apple signing identity is supplied. The DMG is built without Finder-driven cosmetic positioning because the Finder AppleScript stage is unreliable in non-interactive build contexts; the image still contains the signed application and an `/Applications` drop-link. The release helper verifies both the application signature and DMG checksum before reporting success.
 
-The verified 2026-08-08 DMG is `artifacts/2026-08-08_06-10-31/release/bundle/dmg/Turtorge_0.2.0_aarch64.dmg`, SHA-256 `3ee503a9ec32091de8a65688ab4009ba1894842e9dd9d6aec2082dedb491874d`. It includes the terminal-input, Force Restart, fresh-emulator, and centered traffic-light fixes and supersedes every earlier local 0.2.0 artifact.
+The verified 0.2.2 DMG is `artifacts/2026-08-10_00-27-07/release/bundle/dmg/Turtorge_0.2.2_aarch64.dmg`, SHA-256 `0de50dd21efb9cf9f85368e84e97d2f84c98c22b488568b7ef04daed5262dbe1`. Its arm64 executable SHA-256 is `4cfe21927977ffd7c66f73175824f0a58ffaa6afeb7734c2d31929b277e51b74`. It fixes terminal-bottom text clipping while retaining Duplicate Terminal and the explicitly bundled application icon, and supersedes every earlier local artifact.
 
 For a credentialed release, set `APPLE_SIGNING_IDENTITY` to an installed Developer ID Application certificate. Notarization is enabled when one complete authentication set is available:
 

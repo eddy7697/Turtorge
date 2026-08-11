@@ -1,6 +1,7 @@
-import { ExternalLink, FolderOpen, Pencil, Play, RotateCw, Settings2, Trash2, Type } from "lucide-react";
+import { Copy, ExternalLink, FolderOpen, Pencil, Play, RotateCw, Settings2, Trash2, Type } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { closeTerminal, openLauncher } from "../../lib/api";
+import { findPaneForTerminal } from "../../lib/layout";
 import { useAppStore } from "../../stores/appStore";
 import type { TerminalDefinition, Workspace } from "../../types";
 import { EditTerminalDialog } from "../dialogs/EditTerminalDialog";
@@ -21,6 +22,7 @@ export type TerminalActionRequest =
 export function TerminalActions({
   request,
   onRequestChange,
+  onDuplicate,
   onRename,
   onEdit,
   onRemove,
@@ -28,6 +30,7 @@ export function TerminalActions({
 }: {
   request: TerminalActionRequest | null;
   onRequestChange: (request: TerminalActionRequest | null) => void;
+  onDuplicate: (workspaceId: string, terminalId: string) => Promise<void>;
   onRename: (workspace: Workspace, terminalId: string, name: string) => Promise<void>;
   onEdit: (workspace: Workspace, definition: TerminalDefinition) => Promise<void>;
   onRemove: (workspace: Workspace, terminalId: string) => Promise<void>;
@@ -49,6 +52,8 @@ export function TerminalActions({
   const [error, setError] = useState("");
   const [launcherPending, setLauncherPending] = useState(false);
   const [launcherError, setLauncherError] = useState("");
+  const [duplicatePending, setDuplicatePending] = useState(false);
+  const [duplicateError, setDuplicateError] = useState("");
 
   const target = request?.target;
   const runtime = target ? runtimes[target.definition.id] : undefined;
@@ -60,6 +65,9 @@ export function TerminalActions({
   ));
   const launcherId = target?.definition.launcherProfileId ?? settings.defaultLauncherProfileId ?? null;
   const launcher = launcherProfiles.find(({ profile }) => profile.id === launcherId);
+  const duplicateDisabledReason = target && !findPaneForTerminal(target.workspace.layout, target.definition.id)
+    ? "Terminal is not assigned to a pane."
+    : undefined;
 
   const changeRequest = (next: TerminalActionRequest | null) => {
     setError("");
@@ -96,6 +104,19 @@ export function TerminalActions({
       return;
     }
     void launch(actionTarget, profileId);
+  };
+
+  const duplicate = async (actionTarget: TerminalActionTarget) => {
+    if (duplicatePending) return;
+    setDuplicatePending(true);
+    setDuplicateError("");
+    try {
+      await onDuplicate(actionTarget.workspace.id, actionTarget.definition.id);
+    } catch (reason) {
+      setDuplicateError(messageFromReason(reason));
+    } finally {
+      setDuplicatePending(false);
+    }
   };
 
   const finishRename = async (event: FormEvent) => {
@@ -185,6 +206,15 @@ export function TerminalActions({
                   },
                 },
             { type: "separator", key: "primary-separator" },
+            {
+              type: "item",
+              key: "duplicate",
+              label: "Duplicate Terminal",
+              icon: <Copy size={14} />,
+              disabled: duplicatePending || Boolean(duplicateDisabledReason),
+              disabledReason: duplicatePending ? "Duplicating…" : duplicateDisabledReason,
+              onSelect: () => void duplicate(request.target),
+            },
             {
               type: "item",
               key: "rename",
@@ -285,6 +315,18 @@ export function TerminalActions({
             await launch(target, profileId);
           }}
         />
+      )}
+
+      {duplicateError && (
+        <Modal
+          title="Couldn’t duplicate terminal"
+          description="The original terminal was not changed."
+          onClose={() => setDuplicateError("")}
+          width="small"
+          footer={<button className="primary-button" onClick={() => setDuplicateError("")}>Close</button>}
+        >
+          <div className="form-error terminal-edit-error" role="alert">{duplicateError}</div>
+        </Modal>
       )}
 
       {launcherError && (

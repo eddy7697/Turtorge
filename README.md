@@ -32,12 +32,14 @@ The repository contains the completed Windows MVP and its native macOS 12+ exten
 
 | Surface | Primary actions |
 | --- | --- |
-| Terminal tab or sidebar terminal | Open externally, start or force restart, rename, edit, and delete |
+| Terminal tab or sidebar terminal | Open externally, start or force restart, duplicate, rename, edit, and delete |
 | Workspace row | Create a terminal in that workspace and rename the workspace |
 | Pane action area | Create a terminal, split right, split down, and delete the pane |
 | Terminal tab strip | Reorder tabs, move tabs between panes, and use the mouse wheel for horizontal overflow |
 
 Context menus support right-click, Shift+F10, the Menu key, arrow-key navigation, Enter, and Escape with focus restoration. Right-clicking an inactive workspace or terminal targets that item without silently switching the current selection. Double-clicking a terminal tab remains the quick-rename path.
+
+Duplicate Terminal copies the saved shell, directory, command, terminal environment, auto-start, and launcher-inheritance settings into a new independent terminal. The new tab is inserted immediately after its source, selected, and started with a fresh PTY; live process state, screen content, scrollback, and the shell's current directory are not copied.
 
 ### External launchers
 
@@ -128,7 +130,7 @@ Each invocation creates an isolated release directory with both artifacts:
 
 ```text
 artifacts/YYYY-MM-DD_HH-MM-SS/release/bundle/macos/Turtorge.app
-artifacts/YYYY-MM-DD_HH-MM-SS/release/bundle/dmg/Turtorge_0.2.0_aarch64.dmg
+artifacts/YYYY-MM-DD_HH-MM-SS/release/bundle/dmg/Turtorge_0.2.2_aarch64.dmg
 ```
 
 Without Apple credentials, the application receives an ad-hoc signature. To enable Developer ID signing, set `APPLE_SIGNING_IDENTITY`. To notarize, additionally provide either `APPLE_API_KEY`, `APPLE_API_ISSUER`, and `APPLE_API_KEY_PATH`; `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`; or an `APPLE_KEYCHAIN_PROFILE`. Credentials stay outside the repository.
@@ -158,7 +160,7 @@ On macOS, run the native zsh/bash/fish PTY round trip:
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml real_native_login_shells_round_trip_through_a_pty -- --ignored --nocapture
 ```
 
-The current verified frontend suite contains 47 tests. The macOS Rust suite contains 23 default tests plus 4 opt-in native PTY/process integration tests. Production builds emit a known non-blocking warning because the main JavaScript chunk exceeds 500 kB; code splitting remains a future optimization.
+The current verified frontend suite contains 56 tests. The macOS Rust suite contains 23 default tests plus 4 opt-in native PTY/process integration tests. Production builds emit a known non-blocking warning because the main JavaScript chunk exceeds 500 kB; code splitting remains a future optimization.
 
 ## Architecture
 
@@ -190,4 +192,4 @@ These are future phases rather than incomplete items in the approved Windows MVP
 
 ## Design and branding
 
-The UI follows the approved Superdesign explorations and the local tokens in [`.superdesign/design-system.md`](.superdesign/design-system.md). The original artwork remains at [`images/logo.png`](images/logo.png); generated application and platform icons are derived from it without modifying the source image.
+The UI follows the approved Superdesign explorations and the local tokens in [`.superdesign/design-system.md`](.superdesign/design-system.md). The original artwork remains at [`images/logo.png`](images/logo.png); generated application and platform icons are derived from its turtle mark without modifying the source image. Tauri explicitly embeds the generated `.icns` and `.ico` in release bundles so Finder, the Dock, application switching, and Windows surfaces use the Turtorge icon.

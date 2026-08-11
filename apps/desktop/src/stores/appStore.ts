@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import * as api from "../lib/api";
+import { createId } from "../lib/ids";
+import { findPaneForTerminal, insertTerminalAfter } from "../lib/layout";
 import type {
   ApiError,
   AppSettings,
@@ -8,6 +10,7 @@ import type {
   ShellProfile,
   TerminalRuntimeSnapshot,
   TerminalStatus,
+  TerminalDefinition,
   Workspace,
   WslDistribution,
 } from "../types";
@@ -32,6 +35,7 @@ interface AppStore {
   initialize: () => Promise<void>;
   selectWorkspace: (id: string) => Promise<void>;
   saveWorkspace: (workspace: Workspace) => Promise<Workspace>;
+  duplicateTerminal: (workspaceId: string, terminalId: string) => Promise<TerminalDefinition>;
   deleteWorkspace: (id: string) => Promise<void>;
   updateSettings: (settings: AppSettings) => Promise<void>;
   setRuntime: (runtime: TerminalRuntimeSnapshot) => void;
@@ -136,6 +140,37 @@ export const useAppStore = create<AppStore>((set, get) => ({
     return saved;
   },
 
+  duplicateTerminal: async (workspaceId, terminalId) => {
+    const workspace = get().workspaces.find((item) => item.id === workspaceId);
+    const source = workspace?.terminals.find((terminal) => terminal.id === terminalId);
+    if (!workspace || !source) throw new Error("Terminal not found.");
+    if (!findPaneForTerminal(workspace.layout, terminalId)) {
+      throw new Error("Terminal is not assigned to a pane.");
+    }
+
+    const duplicate: TerminalDefinition = {
+      ...source,
+      id: createId("terminal"),
+      name: nextTerminalCopyName(source.name, workspace.terminals.map((terminal) => terminal.name)),
+      shellProfile: { ...source.shellProfile },
+      workingDirectory: { ...source.workingDirectory },
+      environmentVariables: source.environmentVariables.map((variable) => ({ ...variable })),
+    };
+    const sourceIndex = workspace.terminals.findIndex((terminal) => terminal.id === terminalId);
+    const terminals = [...workspace.terminals];
+    terminals.splice(sourceIndex + 1, 0, duplicate);
+
+    await get().saveWorkspace({
+      ...workspace,
+      terminals,
+      layout: insertTerminalAfter(workspace.layout, terminalId, duplicate.id),
+      updatedAt: new Date().toISOString(),
+    });
+    if (get().activeWorkspaceId !== workspaceId) await get().selectWorkspace(workspaceId);
+    get().requestTerminalStart(duplicate.id);
+    return duplicate;
+  },
+
   deleteWorkspace: async (id) => {
     await api.deleteWorkspace(id);
     set((state) => {
@@ -233,4 +268,14 @@ function messageFromError(error: unknown): string {
     return String((error as ApiError).message);
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+function nextTerminalCopyName(sourceName: string, existingNames: string[]): string {
+  const baseName = sourceName.replace(/ Copy(?: \d+)?$/i, "").trimEnd();
+  const usedNames = new Set(existingNames.map((name) => name.toLocaleLowerCase()));
+  for (let copyNumber = 1; ; copyNumber += 1) {
+    const suffix = copyNumber === 1 ? " Copy" : ` Copy ${copyNumber}`;
+    const candidate = `${baseName.slice(0, 80 - suffix.length).trimEnd()}${suffix}`;
+    if (!usedNames.has(candidate.toLocaleLowerCase())) return candidate;
+  }
 }

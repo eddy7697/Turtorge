@@ -1,6 +1,6 @@
 [package]
 name = "turtorge"
-version = "0.2.0"
+version = "0.2.2"
 description = "Workspace-first terminal manager for AI-native developers"
 authors = ["Turtorge"]
 edition = "2024"

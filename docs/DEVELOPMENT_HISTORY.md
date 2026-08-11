@@ -1,7 +1,7 @@
 # Turtorge Development History
 
-Last updated: 2026-08-08
-Current stage: The completed Windows feature baseline remains unchanged; the native Apple Silicon macOS 0.2.0 application and delivery route are implemented and locally verified
+Last updated: 2026-08-10
+Current stage: The completed Windows feature baseline remains unchanged; the cross-platform Duplicate Terminal action, bundled application icon, and terminal-bottom clipping fix are implemented and locally verified in the Apple Silicon macOS 0.2.2 delivery
 
 This document preserves the product and engineering context of the first Turtorge implementation cycle so future work can continue without reconstructing decisions from chat history.
 
@@ -66,7 +66,7 @@ The product direction was stress-tested with the user before implementation. The
 - Native macOS is implemented as a shared-codebase extension of the Windows product. The supported Mac target is Apple Silicon on macOS 12 or newer; Intel/x86 artifacts and acceptance are excluded.
 - The macOS feature target preserves the implemented Windows application surface while translating platform semantics: native zsh, bash, fish, and custom shells; Finder and macOS launchers; native traffic lights and Command/Option shortcuts; and a single restorable application window whose close action keeps managed terminals alive while Command+Q confirms termination.
 - macOS uses independent platform application-data settings. Existing Windows JSON remains backward compatible, but automatic Windows-to-Mac migration and `.turtorge.yml` portability remain deferred.
-- The macOS release target is version 0.2.0 with Apple Silicon `.app` and `.dmg` artifacts. Ad-hoc signing is the available local delivery gate; Developer ID signing and notarization must be wired for credentialed execution without storing credentials in the repository.
+- The current macOS release target is version 0.2.2 with Apple Silicon `.app` and `.dmg` artifacts. Ad-hoc signing is the available local delivery gate; Developer ID signing and notarization must be wired for credentialed execution without storing credentials in the repository.
 - A saved macOS working directory that disappears may fall back to the user's home only with a visible terminal notice. Newly selected invalid directories and missing configured shells fail visibly without silent substitution.
 - `DEVELOPMENT_HISTORY.md` and `MVP_IMPLEMENTATION.md` govern confirmed implementation state. `PRD.md`, `ARCHITECTURE.md`, `UI_SPEC.md`, and `ROADMAP.md` preserve draft vision and future direction where they describe capabilities outside that state.
 - Edit Terminal now owns the full terminal definition. Label and launcher changes apply immediately; shell, working directory, startup command, environment, and auto-start changes apply on the next start. A running terminal receives an explicit Restart Now or Later choice when process configuration changes. Tab double-click remains the quick-rename path.
@@ -74,6 +74,9 @@ The product direction was stress-tested with the user before implementation. The
 - The visible tab-close, pane-edit, and pane-delete buttons are removed. The high-frequency external-launcher button remains visible, while pane creation, splitting, and deletion move to the pane action-area context menu; native xterm right-click behavior remains untouched.
 - Workspace context menus provide New Terminal and Rename Workspace. Creating a terminal from an inactive workspace first activates that workspace and inserts the terminal into its first pane. Workspace names are trimmed, limited to 80 characters, and may duplicate existing names.
 - Context menus are theme-aware, keyboard accessible through Shift+F10 or the Menu key, and use a 248 px width with 30 px single-line rows. Empty-pane deletion is immediate, non-empty pane deletion is confirmed, and the final pane remains protected.
+- Duplicate Terminal is a one-click tab/sidebar context action on both platforms. It copies the saved terminal-owned configuration into a new independent definition, inserts and selects it immediately after the source in the same pane, switches to an inactive source workspace when needed, and starts a fresh PTY without copying live process, screen, scrollback, or live-cwd state.
+- Duplicate names use `Copy`, `Copy 2`, and subsequent case-insensitive collision-free suffixes within the 80-character label limit. Orphan definitions cannot be duplicated, persistence is completed before activation/start, and a failed save leaves no partial definition or runtime request.
+- Release bundles must explicitly reference the generated turtle `.icns` and `.ico`; merely keeping icon files in the Tauri icon directory is not sufficient evidence that macOS embeds or displays them.
 
 ## 3. Design phase
 
@@ -126,6 +129,7 @@ The source logo was not altered. `images/app-icon.png` and the Tauri platform ic
 - Environment-variable editor and plaintext warning
 - Multi-line paste and terminal-close safeguards
 - Shared custom context menus for terminal tabs, sidebar terminals, workspaces, and pane action areas, with viewport clamping, disabled-state explanations, keyboard navigation, and Escape focus restoration
+- Cross-platform Duplicate Terminal action with saved-setting snapshots, adjacent insertion, fresh runtime startup, deterministic Copy naming, orphan protection, and visible persistence failures
 - Context-targeted rename and full editor flows, confirmed terminal deletion, and confirmed force restart through a freshly attached PTY
 - Workspace rename dialog and context-targeted New Terminal flow for active or inactive workspaces
 - Platform-aware Create Workspace, New Terminal, Edit Terminal, Settings, launcher, title-bar, and shortcut flows for native macOS shells and paths
@@ -163,7 +167,7 @@ The source logo was not altered. `images/app-icon.png` and the Tauri platform ic
 - Original logo retained at `images/logo.png`
 - Application icon generated at `images/app-icon.png`
 - Windows, macOS, iOS, and Android Tauri icon assets generated for future packaging compatibility
-- Apple Silicon macOS 0.2.0 configuration with native title-bar overlay, macOS 12 deployment target, ad-hoc signing, and `.app`/`.dmg` release output
+- Apple Silicon macOS 0.2.2 configuration with native title-bar overlay, macOS 12 deployment target, explicit `.icns` bundling, ad-hoc signing, and `.app`/`.dmg` release output
 - Root macOS release helper with isolated artifacts and optional Developer ID signing/notarization driven only by external credentials
 
 ## 5. Important engineering discoveries
@@ -358,6 +362,17 @@ Resolution:
 - Run the Windows frontend, Rust, lint, and Tauri production-build gate on `windows-latest` through the checked-in GitHub Actions workflow.
 - Keep the macOS release target Apple Silicon-only and avoid installing an unrelated cross-compilation stack solely to imitate the Windows runner.
 
+### Tauri icon assets are not macOS bundle declarations
+
+The repository already contained a complete `icon.icns`, but every retained 0.2.0 `.app` lacked `Contents/Resources`, `CFBundleIconFile`, and sealed icon resources. Tauri did not infer a macOS bundle icon merely because the generated file existed under `src-tauri/icons`.
+
+Resolution:
+
+- Declare the generated desktop PNG, `.icns`, and `.ico` files explicitly through `bundle.icon` in the shared Tauri configuration.
+- Keep the original horizontal `images/logo.png` unchanged and use the existing square transparent turtle crop as the icon source.
+- Inspect the built `.app`, `Info.plist`, signed resource set, and read-only mounted DMG rather than treating source asset presence as delivery evidence.
+- Ask AppKit `NSWorkspace` to resolve the built application icon so the Finder/Dock-facing system result is verified without launching a second application instance against live workspace data.
+
 ## 6. Verification history
 
 The completed MVP passed:
@@ -514,6 +529,30 @@ The macOS force-restart and native-title-bar alignment follow-up additionally pa
 
 Reusable lesson: terminal shutdown is a process-control operation and must never be simulated by writing commands to the PTY. A forced restart also changes emulator identity even when the saved terminal definition is unchanged, so the runtime generation owns xterm reset and pending-input cleanup.
 
+The Duplicate Terminal and application-icon follow-up additionally passed:
+
+- TDD red/green coverage at the agreed layout, app-store, and shared-action-menu seams
+- Frontend Vitest: 56/56 tests, including adjacent insertion, active selection, orphan detection, full terminal-owned configuration copying, independent IDs, case-insensitive Copy numbering, the 80-character label limit, inactive-workspace activation, persistence failure atomicity, shared-menu invocation, disabled explanations, and readable failure UI
+- Browser-mode acceptance with isolated mock data: `Codex Copy` and `Codex Copy 2` appeared immediately after their sources, became selected/running, synchronized to the sidebar, and produced no console warnings or errors
+- TypeScript compilation and Vite production build; the known non-blocking chunk-size warning remains
+- Rust formatting, 23 default tests, all 4 opt-in real native PTY/process tests, and Clippy with warnings denied
+- Apple Silicon 0.2.1 `.app` production build with macOS 12 minimum version, arm64 executable, and strict ad-hoc signature verification
+- Explicit signed `Contents/Resources/icon.icns` plus `CFBundleIconFile=icon.icns`; AppKit `NSWorkspace` resolved the built application to the turtle artwork used by Finder and Dock surfaces
+- Read-only 0.2.1 DMG mount with the same signed application/icon and the `/Applications` drop-link, followed by clean unmount
+
+Reusable lesson: terminal duplication is definition cloning, not runtime cloning. Resolve the latest stored workspace at action time, assign a new definition ID, persist the definition and layout atomically, then request a fresh runtime only after persistence succeeds.
+
+The terminal-bottom clipping follow-up additionally passed:
+
+- A deterministic browser geometry reproduction showed xterm text layers extending up to 7 px beyond their own fitted element and reaching the clipped terminal-surface edge
+- FitAddon was confirmed to measure the host height but subtract padding only from the `.xterm` element; padding on `.xterm-host` therefore inflated the proposed row count
+- The unchanged `8px 9px 6px` terminal padding now lives on `.xterm`, preserving the intended visual inset while making it part of FitAddon's row calculation
+- Browser acceptance at 1024×640, 1280×720, and 1440×900, including vertically split panes, retained positive bottom clearance and produced no console warnings or errors
+- Frontend Vitest remained 56/56; TypeScript/Vite production build, Rust formatting, 23 default tests, all 4 opt-in real native PTY/process tests, and Clippy with warnings denied passed
+- Apple Silicon 0.2.2 `.app` and `.dmg` passed arm64, version, strict ad-hoc signature, bundled-icon, checksum, read-only mount, and `/Applications` drop-link verification
+
+Reusable lesson: xterm FitAddon derives available rows from the parent height and the terminal element's own padding. Visual padding outside `.xterm` is invisible to its sizing algorithm and can place the final rendered row on or beyond a clipped boundary.
+
 ## 7. Delivery state
 
 The first complete project commit is:
@@ -554,7 +593,11 @@ The root `build-latest.bat` script synchronizes locked pnpm dependencies, then b
 
 The 2026-08-04 persistent TUI-rendering fix was built at `artifacts/2026-08-04_23-12-18_596/release/turtorge.exe`. Its SHA-256 is `383A6AC5AE63867F29E75542AFC1A7F52DEC8223EC6A659131F3B62BBF0DF10B`; native Claude Code and k9s acceptance remains pending.
 
-The current verified Apple Silicon macOS 0.2.0 artifacts are `artifacts/2026-08-08_06-10-31/release/bundle/macos/Turtorge.app` and `artifacts/2026-08-08_06-10-31/release/bundle/dmg/Turtorge_0.2.0_aarch64.dmg`. They supersede the earlier builds with the native terminal-capability, Force Restart, fresh-emulator, and centered traffic-light fixes. The DMG SHA-256 is `3ee503a9ec32091de8a65688ab4009ba1894842e9dd9d6aec2082dedb491874d`; the bundled arm64 executable SHA-256 is `ba9e18000dcaae7a5241ae23227179b6028b702f7e25932d361df3a6c635494b`. The current machine has no Developer ID identity or complete Xcode installation, so these artifacts are ad-hoc signed. The same helper accepts an externally supplied signing identity and complete Apple API-key, Apple-ID, or stored-keychain notarization credentials without committing secrets.
+The previous verified Apple Silicon macOS 0.2.0 artifacts remain at `artifacts/2026-08-08_06-10-31/release/bundle/macos/Turtorge.app` and `artifacts/2026-08-08_06-10-31/release/bundle/dmg/Turtorge_0.2.0_aarch64.dmg` as the terminal-capability, Force Restart, fresh-emulator, and centered-traffic-light baseline.
+
+The verified Apple Silicon macOS 0.2.1 artifacts remain at `artifacts/2026-08-09_11-18-17/release/bundle/macos/Turtorge.app` and `artifacts/2026-08-09_11-18-17/release/bundle/dmg/Turtorge_0.2.1_aarch64.dmg` as the Duplicate Terminal and correctly bundled application-icon baseline.
+
+The current verified Apple Silicon macOS 0.2.2 artifacts are `artifacts/2026-08-10_00-27-07/release/bundle/macos/Turtorge.app` and `artifacts/2026-08-10_00-27-07/release/bundle/dmg/Turtorge_0.2.2_aarch64.dmg`. They add the terminal-bottom clipping fix while retaining the complete 0.2.1 feature set. The DMG SHA-256 is `0de50dd21efb9cf9f85368e84e97d2f84c98c22b488568b7ef04daed5262dbe1`; the bundled arm64 executable SHA-256 is `4cfe21927977ffd7c66f73175824f0a58ffaa6afeb7734c2d31929b277e51b74`; and the bundled `icon.icns` SHA-256 is `b756c6d9eb907437589457dad65b7dea2d741993bd3fea2a5a3f61365dd08418`. The current machine has no Developer ID identity or complete Xcode installation, so these artifacts are ad-hoc signed. The same helper accepts externally supplied signing and notarization credentials without committing secrets.
 
 ## 8. Deferred scope
 
