@@ -49,8 +49,10 @@
 .terminal-surface { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--terminal-bg); }
 .terminal-view-layer { position: absolute; inset: 0; }
 .terminal-view-layer.inactive { visibility: hidden; pointer-events: none; }
-.xterm-host { position: absolute; inset: 0; }
-.xterm-host .xterm { height: 100%; padding: 8px 9px 6px; }
+.xterm-host { position: absolute; inset: 0; padding: 8px 9px 6px; }
+.xterm-host .xterm { height: 100%; }
+.platform-macos .xterm-host { padding: 0; }
+.platform-macos .xterm-host .xterm { padding: 8px 9px 6px; }
 .xterm-host .xterm-viewport { scrollbar-color: var(--border-strong) transparent; scrollbar-width: thin; }
 .terminal-overlay { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; color: var(--text-muted); background: color-mix(in srgb, var(--terminal-bg) 92%, transparent); text-align: center; }
 .terminal-overlay p { margin: 0; display: grid; gap: 5px; }

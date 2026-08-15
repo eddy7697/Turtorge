@@ -28,6 +28,7 @@ pub fn run() {
         .try_init();
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_root = app

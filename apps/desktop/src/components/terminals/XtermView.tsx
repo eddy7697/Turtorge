@@ -1,6 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useEffect, useRef, useState } from "react";
 import { useResolvedTheme } from "../../app/ThemeProvider";
 import { attachTerminal, detachTerminal, resizeTerminal, startTerminal, writeTerminal, writeTerminalDefinition } from "../../lib/api";
@@ -110,6 +111,10 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
       if (lineCount > 1 && !window.confirm(`Paste ${lineCount} lines into ${definition.name}?\n\nReview multi-line commands before executing them.`)) return;
       sendInput(data);
     });
+    const selectionDisposable = terminal.onSelectionChange(() => {
+      const selection = terminal.getSelection();
+      if (selection.length > 0) void writeText(selection).catch(() => undefined);
+    });
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
       const current = useAppStore.getState().runtimes[definition.id];
       if (!current) return;
@@ -126,6 +131,7 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
       observer.disconnect();
       cancelAnimationFrame(initialFitFrame);
       inputDisposable.dispose();
+      selectionDisposable.dispose();
       resizeDisposable.dispose();
       terminal.dispose();
       terminalRef.current = null;

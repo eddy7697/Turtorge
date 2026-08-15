@@ -1,7 +1,7 @@
 # Turtorge Development History
 
-Last updated: 2026-08-10
-Current stage: The completed Windows feature baseline remains unchanged; the cross-platform Duplicate Terminal action, bundled application icon, and terminal-bottom clipping fix are implemented and locally verified in the Apple Silicon macOS 0.2.2 delivery
+Last updated: 2026-08-15
+Current stage: Terminal mouse selection now copies text directly to the system clipboard across profiles; Windows production build and terminal regression verification pass, while the previously recorded Clippy dead-code failure remains
 
 This document preserves the product and engineering context of the first Turtorge implementation cycle so future work can continue without reconstructing decisions from chat history.
 
@@ -77,6 +77,8 @@ The product direction was stress-tested with the user before implementation. The
 - Duplicate Terminal is a one-click tab/sidebar context action on both platforms. It copies the saved terminal-owned configuration into a new independent definition, inserts and selects it immediately after the source in the same pane, switches to an inactive source workspace when needed, and starts a fresh PTY without copying live process, screen, scrollback, or live-cwd state.
 - Duplicate names use `Copy`, `Copy 2`, and subsequent case-insensitive collision-free suffixes within the 80-character label limit. Orphan definitions cannot be duplicated, persistence is completed before activation/start, and a failed save leaves no partial definition or runtime request.
 - Release bundles must explicitly reference the generated turtle `.icns` and `.ico`; merely keeping icon files in the Tauri icon directory is not sufficient evidence that macOS embeds or displays them.
+- Terminal renderer padding is platform-specific. Windows keeps the established spacing on the xterm host so the renderer itself has no visible frame; macOS keeps the padding on `.xterm` so FitAddon includes it in row calculations and avoids bottom clipping.
+- Completing a mouse selection in any terminal copies the selected text directly to the system clipboard. This behavior belongs to the shared xterm layer rather than the Claude Code profile because AI tools may also be launched from ordinary shell terminals. Turtorge requests clipboard text-write permission only and does not read clipboard contents for this behavior.
 
 ## 3. Design phase
 
@@ -128,6 +130,7 @@ The source logo was not altered. `images/app-icon.png` and the Tauri platform ic
 - Shell, Claude Code, Codex, and custom terminal profiles
 - Environment-variable editor and plaintext warning
 - Multi-line paste and terminal-close safeguards
+- Cross-profile copy-on-select through xterm's completed-selection event and the native system clipboard
 - Shared custom context menus for terminal tabs, sidebar terminals, workspaces, and pane action areas, with viewport clamping, disabled-state explanations, keyboard navigation, and Escape focus restoration
 - Cross-platform Duplicate Terminal action with saved-setting snapshots, adjacent insertion, fresh runtime startup, deterministic Copy naming, orphan protection, and visible persistence failures
 - Context-targeted rename and full editor flows, confirmed terminal deletion, and confirmed force restart through a freshly attached PTY
@@ -161,6 +164,7 @@ The source logo was not altered. `images/app-icon.png` and the Tauri platform ic
 - Unix PTY command construction for interactive/login native shells with the Windows ConPTY cursor handshake kept Windows-only
 - Finder and macOS `.app` discovery and detached launching, including exact Unity Hub editor-version resolution
 - Platform bootstrap data and macOS close, reopen, quit, and managed-process termination event handling
+- Native clipboard plugin registration with least-privilege text-write capability
 
 ### Branding and release assets
 
@@ -553,6 +557,33 @@ The terminal-bottom clipping follow-up additionally passed:
 
 Reusable lesson: xterm FitAddon derives available rows from the parent height and the terminal element's own padding. Visual padding outside `.xterm` is invisible to its sizing algorithm and can place the final rendered row on or beyond a clipped boundary.
 
+The 2026-08-12 native Windows regression verification of the macOS 0.2.2 source at `c767dd5` confirmed:
+
+- Locked dependency synchronization completed with pnpm 11.9.0, and the pinned Rust 1.97.1 MSVC toolchain was active. The local Node.js version was 22.13.1 rather than the repository-pinned 22.16.0.
+- Frontend Vitest passed 56/56 tests, and the TypeScript/Vite production build completed with only the known non-blocking chunk-size warning.
+- Rust formatting passed. The default Rust suite passed 19 tests with the real WSL test ignored by default, and the opt-in real PowerShell/WSL ConPTY round trip passed 1/1.
+- The Tauri CLI `--no-bundle` production build succeeded through `build-latest.bat` and produced an isolated standalone Windows executable.
+- The Windows Clippy gate with `-D warnings` failed because `platform::login_shell_path_entries` is compiled but unused on Windows while its launcher caller is `cfg(not(windows))`. This is the only observed source-level regression; it does not prevent the tested Windows executable from compiling.
+- Tauri also emitted its existing non-blocking warning that bundle identifier `dev.turtorge.app` ends in `.app`. Native GUI startup acceptance was not part of this compile-focused verification.
+
+The 2026-08-13 Windows terminal-frame follow-up additionally passed:
+
+- Terminal padding moved back to `.xterm-host` for Windows, restoring the pre-macOS-fix layout, while `.platform-macos` keeps the FitAddon-aware padding on `.xterm`.
+- Two CSS contract regressions cover the Windows and macOS selector split; the complete frontend suite passed 58/58 tests.
+- TypeScript compilation and the Vite production build passed with only the known non-blocking chunk-size warning.
+- Browser-mode Windows acceptance confirmed `platform-windows`, `8px 9px 6px` host padding, `0px` xterm padding, no visible extra black frame, and no console warnings or errors.
+- An isolated Windows Tauri CLI `--no-bundle` production build completed successfully. Native macOS rendering was not reverified on the Windows host; its required selector and padding remain protected by the regression test.
+
+The 2026-08-15 terminal copy-on-select follow-up additionally passed:
+
+- A red/green xterm regression proving that a completed selection writes the exact selected text to the system clipboard
+- Frontend Vitest: 59/59 tests
+- TypeScript compilation and Vite production build, with only the known non-blocking chunk-size warning
+- Rust formatting, 19 default tests, and the opt-in real PowerShell/WSL ConPTY round trip
+- Tauri capability generation and a Windows CLI `--no-bundle` production build with the official clipboard plugin and only `clipboard-manager:allow-write-text`
+- Windows Clippy still fails only on the previously recorded unused macOS login-PATH helper; this follow-up introduced no additional warning
+- Automated native mouse dragging was not performed because the available Windows UI automation policy excludes terminal applications
+
 ## 7. Delivery state
 
 The first complete project commit is:
@@ -598,6 +629,12 @@ The previous verified Apple Silicon macOS 0.2.0 artifacts remain at `artifacts/2
 The verified Apple Silicon macOS 0.2.1 artifacts remain at `artifacts/2026-08-09_11-18-17/release/bundle/macos/Turtorge.app` and `artifacts/2026-08-09_11-18-17/release/bundle/dmg/Turtorge_0.2.1_aarch64.dmg` as the Duplicate Terminal and correctly bundled application-icon baseline.
 
 The current verified Apple Silicon macOS 0.2.2 artifacts are `artifacts/2026-08-10_00-27-07/release/bundle/macos/Turtorge.app` and `artifacts/2026-08-10_00-27-07/release/bundle/dmg/Turtorge_0.2.2_aarch64.dmg`. They add the terminal-bottom clipping fix while retaining the complete 0.2.1 feature set. The DMG SHA-256 is `0de50dd21efb9cf9f85368e84e97d2f84c98c22b488568b7ef04daed5262dbe1`; the bundled arm64 executable SHA-256 is `4cfe21927977ffd7c66f73175824f0a58ffaa6afeb7734c2d31929b277e51b74`; and the bundled `icon.icns` SHA-256 is `b756c6d9eb907437589457dad65b7dea2d741993bd3fea2a5a3f61365dd08418`. The current machine has no Developer ID identity or complete Xcode installation, so these artifacts are ad-hoc signed. The same helper accepts externally supplied signing and notarization credentials without committing secrets.
+
+The Windows verification of the same 0.2.2 source produced `artifacts/2026-08-12_06-35-30_874/release/turtorge.exe`, size 5,182,976 bytes, SHA-256 `F6919B2B2DF542E8962E49F098C996B84D8CCFD07E8BAB0505BDD503F1EDF66F`. The executable compiled successfully through the Tauri CLI with embedded production frontend assets; the Windows regression workflow remains red locally at its stricter Clippy step until the macOS-only login-PATH helper is target-gated.
+
+The Windows terminal-frame follow-up produced `artifacts/2026-08-13_08-31-12_203/release/turtorge.exe`, size 5,182,976 bytes, SHA-256 `3730C10106EA2E017BF0FCF14303822F9CCBFF7755AF690331492932FC8A7138`. It embeds the platform-specific terminal padding and supersedes the previous local Windows verification artifact for this source tree.
+
+The Windows terminal copy-on-select follow-up produced `artifacts/2026-08-16_02-34-47_405/release/turtorge.exe`, size 5,416,448 bytes, SHA-256 `DFD1ACECCC7592D4529ED906EFC2AA5B608C57F4035BFA9EDF12D8E7F0BA1058`. It embeds native clipboard text-write support without replacing the standard release executable.
 
 ## 8. Deferred scope
 

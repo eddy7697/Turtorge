@@ -2,6 +2,7 @@
 
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import * as api from "../../lib/api";
 import { useAppStore } from "../../stores/appStore";
 import type { TerminalEvent, TerminalRuntimeSnapshot, Workspace } from "../../types";
@@ -11,6 +12,8 @@ import { SHIFT_ENTER_SEQUENCE } from "./terminalKeymap";
 const xterm = vi.hoisted(() => ({
   dataHandler: null as ((data: string) => void) | null,
   keyHandler: null as ((event: KeyboardEvent) => boolean) | null,
+  selectionHandler: null as (() => void) | null,
+  selection: "",
   writes: [] as Array<string | number[]>,
   fit: vi.fn(),
   refresh: vi.fn(),
@@ -30,7 +33,9 @@ vi.mock("@xterm/xterm", () => ({
     open() {}
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) { xterm.keyHandler = handler; }
     onData(handler: (data: string) => void) { xterm.dataHandler = handler; return { dispose: vi.fn() }; }
+    onSelectionChange(handler: () => void) { xterm.selectionHandler = handler; return { dispose: vi.fn() }; }
     onResize() { return { dispose: vi.fn() }; }
+    getSelection() { return xterm.selection; }
     write(data: string | Uint8Array) { xterm.writes.push(typeof data === "string" ? data : Array.from(data)); }
     refresh(start: number, end: number) { xterm.refresh(start, end); }
     reset() { xterm.reset(); }
@@ -38,6 +43,8 @@ vi.mock("@xterm/xterm", () => ({
     dispose() { xterm.dispose(); }
   },
 }));
+
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
 
 vi.mock("../../lib/api", () => ({
   attachTerminal: vi.fn(),
@@ -109,6 +116,8 @@ describe("XtermView", () => {
   beforeEach(() => {
     xterm.dataHandler = null;
     xterm.keyHandler = null;
+    xterm.selectionHandler = null;
+    xterm.selection = "";
     xterm.writes.length = 0;
     xterm.fit.mockClear();
     xterm.refresh.mockClear();
@@ -121,11 +130,22 @@ describe("XtermView", () => {
     vi.mocked(api.startTerminal).mockReset();
     vi.mocked(api.writeTerminal).mockReset().mockResolvedValue(undefined);
     vi.mocked(api.writeTerminalDefinition).mockReset().mockResolvedValue(undefined);
+    vi.mocked(writeText).mockReset().mockResolvedValue(undefined);
     useAppStore.setState({ runtimes: {}, errors: {}, pendingConnections: {}, startRequests: {} });
     vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     vi.stubGlobal("crypto", { randomUUID: () => "connection-test" });
+  });
+
+  it("copies a completed terminal selection to the system clipboard", async () => {
+    render(<XtermView workspace={workspace} definition={workspace.terminals[0]} activate={false} connectionGeneration={0} visible />);
+    await waitFor(() => expect(xterm.selectionHandler).not.toBeNull());
+
+    xterm.selection = "selected Claude output";
+    xterm.selectionHandler!();
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("selected Claude output"));
   });
 
   afterEach(() => {
