@@ -1,7 +1,7 @@
 # Turtorge Development History
 
 Last updated: 2026-08-28
-Current stage: Manual Pinned Workspace ordering and cross-Workspace terminal-tab moves are implemented with atomic persistence and live PTY/xterm preservation; automated frontend, production-frontend, and Rust verification pass, while native mouse acceptance, the unavailable local WSL precondition, and the previously recorded Clippy dead-code failure remain noted
+Current stage: Manual Pinned Workspace ordering and cross-Workspace terminal-tab moves are implemented with atomic persistence and live PTY/xterm preservation; automated frontend, Rust, and isolated Windows production-build verification pass, while native mouse acceptance, the unavailable local WSL precondition, and the previously recorded Clippy dead-code failure remain noted
 
 This document preserves the product and engineering context of the first Turtorge implementation cycle so future work can continue without reconstructing decisions from chat history.
 
@@ -601,7 +601,8 @@ The 2026-08-28 Workspace-ordering and cross-Workspace terminal-move follow-up ad
 - Rust formatting passed. The default Rust suite passed 34 tests with the real WSL integration test ignored by default.
 - The opt-in Windows/WSL PTY test reached its WSL prerequisite after the Windows PTY smoke but could not complete because no user WSL distribution is installed on this host.
 - Clippy with warnings denied still fails only on the previously recorded Windows-unused `platform::login_shell_path_entries`; allowing that known dead-code baseline leaves no new Clippy warning.
-- Native WebView2 mouse-drag acceptance was not automated because the available Windows UI automation policy excludes terminal applications. No release executable was produced or replaced for this source-verified follow-up.
+- Native WebView2 mouse-drag acceptance was not automated because the available Windows UI automation policy excludes terminal applications.
+- After feature commit `c061f2e`, the isolated Windows Tauri `--no-bundle` build completed successfully at `artifacts/2026-08-28_10-53-06_688/release/turtorge.exe`. The executable is 5,453,312 bytes with SHA-256 `B90266E3533483171DB3CD3EAB7ED257BCA81AFF7849CC9EC79B12392894732D`; the standard release executable was not replaced.
 
 Reusable lesson: moving a live terminal is an ownership transaction, not a restart. Persist both Workspace layouts before rehoming the runtime, keep the xterm host keyed by terminal definition rather than pane ownership, and serialize start/move lifecycle work by definition so a delayed start cannot recreate the terminal under stale Workspace context.
 
@@ -656,6 +657,8 @@ The Windows verification of the same 0.2.2 source produced `artifacts/2026-08-12
 The Windows terminal-frame follow-up produced `artifacts/2026-08-13_08-31-12_203/release/turtorge.exe`, size 5,182,976 bytes, SHA-256 `3730C10106EA2E017BF0FCF14303822F9CCBFF7755AF690331492932FC8A7138`. It embeds the platform-specific terminal padding and supersedes the previous local Windows verification artifact for this source tree.
 
 The Windows terminal copy-on-select follow-up produced `artifacts/2026-08-16_02-34-47_405/release/turtorge.exe`, size 5,416,448 bytes, SHA-256 `DFD1ACECCC7592D4529ED906EFC2AA5B608C57F4035BFA9EDF12D8E7F0BA1058`. It embeds native clipboard text-write support without replacing the standard release executable.
+
+The Windows Workspace-ordering and cross-Workspace terminal-move follow-up was committed as `c061f2e` and produced `artifacts/2026-08-28_10-53-06_688/release/turtorge.exe`, size 5,453,312 bytes, SHA-256 `B90266E3533483171DB3CD3EAB7ED257BCA81AFF7849CC9EC79B12392894732D`. The isolated build embeds the production frontend and Rust/Tauri implementation without replacing the standard release executable; native mouse-drag acceptance remains pending.
 
 ## 8. Deferred scope
 
