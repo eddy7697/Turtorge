@@ -2,6 +2,7 @@ import { AlertCircle, X } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { LayoutNode, PaneNode, SplitDirection, TerminalDefinition, Workspace } from "../../types";
 import { paneCount } from "../../lib/layout";
+import type { TerminalTabDrag, TerminalTabDropTarget } from "../../lib/terminalDrag";
 import type { ContextMenuPoint } from "../ui/ContextMenu";
 import { TerminalPane } from "./TerminalPane";
 
@@ -15,41 +16,42 @@ interface TerminalWorkspaceProps {
   onNewTerminal: (paneId: string) => void;
   onSplit: (paneId: string, direction: SplitDirection) => void;
   onRatioChange: (splitId: string, ratio: number) => void;
-  onMoveTerminal: (sourcePaneId: string, targetPaneId: string, terminalId: string, targetIndex: number) => Promise<void>;
   onDeletePane: (paneId: string) => Promise<void>;
   onRenameTerminal: (terminalId: string, name: string) => Promise<void>;
   terminalContextTargetId: string | null;
   onTerminalContextMenu: (definition: TerminalDefinition, point: ContextMenuPoint) => void;
   onOpenLauncherSettings: () => void;
+  terminalDrag: TerminalTabDrag | null;
+  terminalDropTarget: TerminalTabDropTarget | null;
+  onTabDragStart: (drag: TerminalTabDrag, event: ReactDragEvent<HTMLButtonElement>) => void;
+  onTabDragEnd: () => void;
+  onTabDragOver: (target: TerminalTabDropTarget) => void;
+  onTabDrop: (target: TerminalTabDropTarget) => void;
 }
 
 export function TerminalWorkspace(props: TerminalWorkspaceProps) {
-  const [dragging, setDragging] = useState<{ paneId: string; terminalId: string } | null>(null);
-  const [dropTarget, setDropTarget] = useState<{ paneId: string; index: number } | null>(null);
-  useEffect(() => {
-    setDragging(null);
-    setDropTarget(null);
-  }, [props.workspace.id]);
-
   const startDrag = (paneId: string, terminalId: string, event: ReactDragEvent<HTMLButtonElement>) => {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", terminalId);
-    setDragging({ paneId, terminalId });
-    setDropTarget(null);
-  };
-  const endDrag = () => {
-    setDragging(null);
-    setDropTarget(null);
+    props.onTabDragStart({
+      sourceWorkspaceId: props.workspace.id,
+      sourcePaneId: paneId,
+      terminalId,
+    }, event);
   };
   const moveDropTarget = (paneId: string, index: number) => {
-    if (dragging) setDropTarget({ paneId, index });
+    if (!props.terminalDrag) return;
+    props.onTabDragOver({ workspaceId: props.workspace.id, paneId, index });
   };
   const finishDrop = (paneId: string, index: number) => {
-    if (!dragging) return;
-    const source = dragging;
-    endDrag();
-    void props.onMoveTerminal(source.paneId, paneId, source.terminalId, index).catch(() => undefined);
+    if (!props.terminalDrag) return;
+    props.onTabDrop({ workspaceId: props.workspace.id, paneId, index });
   };
+
+  const dragging = props.terminalDrag
+    ? { paneId: props.terminalDrag.sourcePaneId, terminalId: props.terminalDrag.terminalId }
+    : null;
+  const dropTarget = props.terminalDropTarget?.workspaceId === props.workspace.id
+    ? { paneId: props.terminalDropTarget.paneId, index: props.terminalDropTarget.index }
+    : null;
 
   return (
     <div className="terminal-workspace">
@@ -67,7 +69,7 @@ export function TerminalWorkspace(props: TerminalWorkspaceProps) {
         dragging={dragging}
         dropTarget={dropTarget}
         onTabDragStart={startDrag}
-        onTabDragEnd={endDrag}
+        onTabDragEnd={props.onTabDragEnd}
         onTabDragOver={moveDropTarget}
         onTabDrop={finishDrop}
       />
@@ -85,7 +87,9 @@ interface DragProps {
   onTabDrop: (paneId: string, index: number) => void;
 }
 
-function LayoutRenderer({ node, ...props }: { node: LayoutNode } & TerminalWorkspaceProps & DragProps) {
+type LayoutRendererProps = Omit<TerminalWorkspaceProps, keyof DragProps> & DragProps;
+
+function LayoutRenderer({ node, ...props }: { node: LayoutNode } & LayoutRendererProps) {
   if (node.type === "pane") {
     return (
       <TerminalPane
@@ -114,7 +118,7 @@ function LayoutRenderer({ node, ...props }: { node: LayoutNode } & TerminalWorks
   return <SplitContainer node={node} {...props} />;
 }
 
-function SplitContainer({ node, ...props }: { node: Extract<LayoutNode, { type: "split" }> } & TerminalWorkspaceProps & DragProps) {
+function SplitContainer({ node, ...props }: { node: Extract<LayoutNode, { type: "split" }> } & LayoutRendererProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [ratio, setRatio] = useState(node.ratio);
   const ratioRef = useRef(node.ratio);

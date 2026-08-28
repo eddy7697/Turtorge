@@ -6,6 +6,8 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import * as api from "../../lib/api";
 import { useAppStore } from "../../stores/appStore";
 import type { TerminalEvent, TerminalRuntimeSnapshot, Workspace } from "../../types";
+import { PersistentTerminalDeck } from "./PersistentTerminalDeck";
+import { PersistentTerminalSlot, terminalMountKey } from "./PersistentTerminalSlot";
 import { XtermView } from "./XtermView";
 import { SHIFT_ENTER_SEQUENCE } from "./terminalKeymap";
 
@@ -15,6 +17,7 @@ const xterm = vi.hoisted(() => ({
   selectionHandler: null as (() => void) | null,
   selection: "",
   writes: [] as Array<string | number[]>,
+  construct: vi.fn(),
   fit: vi.fn(),
   refresh: vi.fn(),
   reset: vi.fn(),
@@ -26,6 +29,7 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit = xterm.fit; } }));
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
+    constructor() { xterm.construct(); }
     cols = 80;
     rows = 24;
     options: Record<string, unknown> = {};
@@ -119,6 +123,7 @@ describe("XtermView", () => {
     xterm.selectionHandler = null;
     xterm.selection = "";
     xterm.writes.length = 0;
+    xterm.construct.mockClear();
     xterm.fit.mockClear();
     xterm.refresh.mockClear();
     xterm.reset.mockClear();
@@ -131,7 +136,7 @@ describe("XtermView", () => {
     vi.mocked(api.writeTerminal).mockReset().mockResolvedValue(undefined);
     vi.mocked(api.writeTerminalDefinition).mockReset().mockResolvedValue(undefined);
     vi.mocked(writeText).mockReset().mockResolvedValue(undefined);
-    useAppStore.setState({ runtimes: {}, errors: {}, pendingConnections: {}, startRequests: {} });
+    useAppStore.setState({ runtimes: {}, errors: {}, pendingConnections: {}, pendingStarts: {}, startRequests: {} });
     vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
@@ -280,5 +285,82 @@ describe("XtermView", () => {
     expect(xterm.fit).toHaveBeenCalled();
     expect(xterm.focus).toHaveBeenCalled();
     expect(xterm.dispose).not.toHaveBeenCalled();
+  });
+
+  it("reparents one emulator across pane and workspace owners and disposes it only after deletion", async () => {
+    vi.mocked(api.attachTerminal).mockResolvedValue(runtime);
+    useAppStore.setState({ runtimes: { [runtime.definitionId]: runtime } });
+    const definition = workspace.terminals[0];
+    const paneA = { type: "pane" as const, id: "pane-a", terminalIds: [definition.id], activeTerminalId: definition.id };
+    const paneB = { type: "pane" as const, id: "pane-b", terminalIds: [definition.id], activeTerminalId: definition.id };
+    const paneC = { type: "pane" as const, id: "pane-c", terminalIds: [definition.id], activeTerminalId: definition.id };
+    const emptyPaneA = { ...paneA, terminalIds: [], activeTerminalId: null };
+    const emptyPaneC = { ...paneC, terminalIds: [], activeTerminalId: null };
+    const sourceInPaneA = { ...workspace, layout: paneA };
+    const sourceInPaneB = { ...workspace, layout: paneB };
+    const emptySource = { ...workspace, terminals: [], layout: emptyPaneA };
+    const targetBase: Workspace = {
+      ...workspace,
+      id: "workspace-target",
+      name: "Target",
+      terminals: [],
+      layout: emptyPaneC,
+    };
+    const movedToTarget = { ...targetBase, terminals: [definition], layout: paneC };
+
+    const Harness = ({ stage }: { stage: "pane-a" | "pane-b" | "workspace" | "deleted" }) => {
+      const owner = stage === "pane-a"
+        ? { workspaces: [sourceInPaneA, targetBase], workspaceId: workspace.id, paneId: paneA.id }
+        : stage === "pane-b"
+          ? { workspaces: [sourceInPaneB, targetBase], workspaceId: workspace.id, paneId: paneB.id }
+          : stage === "workspace"
+            ? { workspaces: [emptySource, movedToTarget], workspaceId: targetBase.id, paneId: paneC.id }
+            : { workspaces: [emptySource, targetBase], workspaceId: targetBase.id, paneId: paneC.id };
+      const mountKey = terminalMountKey(owner.workspaceId, owner.paneId, definition.id);
+      return (
+        <>
+          <PersistentTerminalSlot key={mountKey} mountKey={mountKey} />
+          <PersistentTerminalDeck
+            workspaces={owner.workspaces}
+            visibleWorkspaceId={owner.workspaceId}
+            terminalFocusRequest={null}
+          />
+        </>
+      );
+    };
+
+    const { container, rerender } = render(<Harness stage="pane-a" />);
+    await waitFor(() => expect(api.attachTerminal).toHaveBeenCalledTimes(1));
+    const host = container.querySelector<HTMLElement>(".xterm-host");
+    const paneASlot = container.querySelector<HTMLElement>(".persistent-terminal-slot");
+    expect(host).toBeTruthy();
+    expect(paneASlot?.contains(host ?? null)).toBe(true);
+    expect(xterm.construct).toHaveBeenCalledTimes(1);
+
+    rerender(<Harness stage="pane-b" />);
+    await waitFor(() => {
+      const paneBSlot = container.querySelector<HTMLElement>(".persistent-terminal-slot");
+      expect(paneBSlot).not.toBe(paneASlot);
+      expect(paneBSlot?.contains(host ?? null)).toBe(true);
+    });
+    expect(xterm.construct).toHaveBeenCalledTimes(1);
+    expect(xterm.dispose).not.toHaveBeenCalled();
+    expect(api.attachTerminal).toHaveBeenCalledTimes(1);
+
+    const paneBSlot = container.querySelector<HTMLElement>(".persistent-terminal-slot");
+    rerender(<Harness stage="workspace" />);
+    await waitFor(() => {
+      const targetSlot = container.querySelector<HTMLElement>(".persistent-terminal-slot");
+      expect(targetSlot).not.toBe(paneBSlot);
+      expect(targetSlot?.contains(host ?? null)).toBe(true);
+    });
+    expect(xterm.construct).toHaveBeenCalledTimes(1);
+    expect(xterm.dispose).not.toHaveBeenCalled();
+    expect(api.attachTerminal).toHaveBeenCalledTimes(1);
+
+    rerender(<Harness stage="deleted" />);
+    await waitFor(() => expect(xterm.dispose).toHaveBeenCalledTimes(1));
+    expect(api.detachTerminal).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".xterm-host")).toBeNull();
   });
 });

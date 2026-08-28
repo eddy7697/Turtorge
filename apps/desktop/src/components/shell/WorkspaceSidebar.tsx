@@ -1,17 +1,27 @@
 import { ChevronDown, ChevronRight, Folder, FolderGit2, Pin, Plus, Settings } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import { contextMenuPoint, type ContextMenuPoint } from "../ui/ContextMenu";
 import type { LayoutNode, TerminalDefinition, TerminalRuntimeSnapshot, Workspace } from "../../types";
+import type { TerminalTabDrag } from "../../lib/terminalDrag";
+
+const PINNED_WORKSPACE_DRAG_MIME = "application/x-turtorge-pinned-workspace";
 
 interface WorkspaceSidebarProps {
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
   runtimes: Record<string, TerminalRuntimeSnapshot>;
   errors: Record<string, string>;
+  pendingStarts?: Record<string, boolean>;
   pendingConnections: Record<string, number>;
   collapsed: boolean;
   onSelect: (id: string) => void;
   onSelectTerminal: (workspaceId: string, paneId: string, terminalId: string) => void;
+  onReorderPinned: (sourceId: string, targetIndex: number) => Promise<void>;
+  terminalDrag?: TerminalTabDrag | null;
+  terminalDropWorkspaceId?: string | null;
+  onTerminalDragOverWorkspace?: (workspaceId: string) => void;
+  onTerminalDragLeaveWorkspace?: (workspaceId: string) => void;
+  onTerminalDropWorkspace?: (workspaceId: string) => void;
   workspaceContextTargetId: string | null;
   terminalContextTargetId: string | null;
   onWorkspaceContextMenu: (workspace: Workspace, point: ContextMenuPoint) => void;
@@ -33,10 +43,17 @@ export function WorkspaceSidebar({
   activeWorkspaceId,
   runtimes,
   errors,
+  pendingStarts = {},
   pendingConnections,
   collapsed,
   onSelect,
   onSelectTerminal,
+  onReorderPinned,
+  terminalDrag = null,
+  terminalDropWorkspaceId = null,
+  onTerminalDragOverWorkspace = () => undefined,
+  onTerminalDragLeaveWorkspace = () => undefined,
+  onTerminalDropWorkspace = () => undefined,
   workspaceContextTargetId,
   terminalContextTargetId,
   onWorkspaceContextMenu,
@@ -44,9 +61,15 @@ export function WorkspaceSidebar({
   onCreate,
   onSettings,
 }: WorkspaceSidebarProps) {
+  const sidebarContentRef = useRef<HTMLDivElement>(null);
+  const terminalLeaveTimerRef = useRef<{ workspaceId: string; timerId: number } | null>(null);
   const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Set<string>>(
     () => new Set(activeWorkspaceId ? [activeWorkspaceId] : []),
   );
+  const [draggingWorkspaceId, setDraggingWorkspaceId] = useState<string | null>(null);
+  const [pinnedDropIndex, setPinnedDropIndex] = useState<number | null>(null);
+  const [reorderingWorkspaceId, setReorderingWorkspaceId] = useState<string | null>(null);
+  const [reorderError, setReorderError] = useState<string | null>(null);
   const pinned = workspaces.filter((workspace) => workspace.pinned);
   const recent = workspaces
     .filter((workspace) => !workspace.pinned)
@@ -62,10 +85,23 @@ export function WorkspaceSidebar({
     });
   }, [activeWorkspaceId]);
 
+  useEffect(() => {
+    if (!collapsed) return;
+    setDraggingWorkspaceId(null);
+    setPinnedDropIndex(null);
+  }, [collapsed]);
+
+  useEffect(() => () => {
+    if (terminalLeaveTimerRef.current) {
+      window.clearTimeout(terminalLeaveTimerRef.current.timerId);
+    }
+  }, []);
+
   const runtimeLight = (terminalId: string): RuntimeLight => {
     const runtime = runtimes[terminalId];
     if (
       (pendingConnections[terminalId] ?? 0) > 0
+      || Boolean(pendingStarts[terminalId])
       || runtime?.status === "starting"
       || runtime?.status === "running"
       || runtime?.status === "stopping"
@@ -87,7 +123,104 @@ export function WorkspaceSidebar({
     });
   };
 
-  const renderWorkspace = (workspace: Workspace) => {
+  const stopPinnedDrag = () => {
+    setDraggingWorkspaceId(null);
+    setPinnedDropIndex(null);
+  };
+
+  const startPinnedDrag = (workspaceId: string, event: ReactDragEvent<HTMLDivElement>) => {
+    if (collapsed || reorderingWorkspaceId) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(PINNED_WORKSPACE_DRAG_MIME, workspaceId);
+    setReorderError(null);
+    setDraggingWorkspaceId(workspaceId);
+    setPinnedDropIndex(null);
+  };
+
+  const dropIndexFromEvent = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!draggingWorkspaceId) return null;
+    const rows = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>("[data-pinned-workspace-id]"),
+    ).filter((row) => row.dataset.pinnedWorkspaceId !== draggingWorkspaceId);
+    const nextRowIndex = rows.findIndex((row) => {
+      const bounds = row.getBoundingClientRect();
+      return event.clientY < bounds.top + bounds.height / 2;
+    });
+    return nextRowIndex < 0 ? rows.length : nextRowIndex;
+  };
+
+  const scrollSidebarAtEdge = (clientY: number) => {
+    const sidebar = sidebarContentRef.current;
+    if (!sidebar || sidebar.scrollHeight <= sidebar.clientHeight) return;
+    const bounds = sidebar.getBoundingClientRect();
+    const edgeSize = Math.min(44, Math.max(24, bounds.height / 4));
+    const maxScrollTop = sidebar.scrollHeight - sidebar.clientHeight;
+    if (clientY < bounds.top + edgeSize) {
+      sidebar.scrollTop = Math.max(0, sidebar.scrollTop - 14);
+    } else if (clientY > bounds.bottom - edgeSize) {
+      sidebar.scrollTop = Math.min(maxScrollTop, sidebar.scrollTop + 14);
+    }
+  };
+
+  const cancelTerminalLeave = (workspaceId?: string) => {
+    const pending = terminalLeaveTimerRef.current;
+    if (!pending || (workspaceId && pending.workspaceId !== workspaceId)) return;
+    window.clearTimeout(pending.timerId);
+    terminalLeaveTimerRef.current = null;
+  };
+
+  const scheduleTerminalLeave = (workspaceId: string) => {
+    cancelTerminalLeave();
+    const timerId = window.setTimeout(() => {
+      terminalLeaveTimerRef.current = null;
+      onTerminalDragLeaveWorkspace(workspaceId);
+    }, 40);
+    terminalLeaveTimerRef.current = { workspaceId, timerId };
+  };
+
+  const dragOverPinned = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!draggingWorkspaceId || collapsed || reorderingWorkspaceId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setPinnedDropIndex(dropIndexFromEvent(event));
+    scrollSidebarAtEdge(event.clientY);
+  };
+
+  const dropPinned = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!draggingWorkspaceId || collapsed || reorderingWorkspaceId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const transferredId = event.dataTransfer.getData(PINNED_WORKSPACE_DRAG_MIME);
+    const sourceId = transferredId || draggingWorkspaceId;
+    if (sourceId !== draggingWorkspaceId || !pinned.some((workspace) => workspace.id === sourceId)) {
+      stopPinnedDrag();
+      return;
+    }
+    const targetIndex = pinnedDropIndex ?? dropIndexFromEvent(event);
+    stopPinnedDrag();
+    if (targetIndex === null) return;
+
+    setReorderingWorkspaceId(sourceId);
+    setReorderError(null);
+    void onReorderPinned(sourceId, targetIndex)
+      .catch((reason) => {
+        setReorderError(`Could not reorder pinned workspaces. ${messageFromReason(reason)}`);
+      })
+      .finally(() => setReorderingWorkspaceId(null));
+  };
+
+  const remainingPinned = draggingWorkspaceId
+    ? pinned.filter((workspace) => workspace.id !== draggingWorkspaceId)
+    : pinned;
+  const markerBeforeWorkspaceId = pinnedDropIndex === null
+    ? null
+    : remainingPinned[pinnedDropIndex]?.id ?? null;
+  const markerAtEnd = pinnedDropIndex !== null && pinnedDropIndex >= remainingPinned.length;
+
+  const renderWorkspace = (workspace: Workspace, pinnedIndex?: number) => {
     const terminals = orderedSidebarTerminals(workspace);
     const count = terminals.filter(({ definition }) => runtimeLight(definition.id) === "alive").length;
     const active = workspace.id === activeWorkspaceId;
@@ -95,9 +228,37 @@ export function WorkspaceSidebar({
     const terminalListId = `workspace-${workspace.id}-terminals`;
 
     return (
-      <div className="workspace-tree-item" key={workspace.id}>
+      <div
+        className={`workspace-tree-item ${draggingWorkspaceId === workspace.id ? "dragging" : ""} ${terminalDropWorkspaceId === workspace.id ? "terminal-drop-target" : ""}`}
+        key={workspace.id}
+        onDragOver={(event) => {
+          if (!terminalDrag) return;
+          cancelTerminalLeave(workspace.id);
+          event.preventDefault();
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = "move";
+          scrollSidebarAtEdge(event.clientY);
+          onTerminalDragOverWorkspace(workspace.id);
+        }}
+        onDragLeave={(event) => {
+          if (!terminalDrag || event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          scheduleTerminalLeave(workspace.id);
+        }}
+        onDrop={(event) => {
+          if (!terminalDrag) return;
+          cancelTerminalLeave();
+          event.preventDefault();
+          event.stopPropagation();
+          onTerminalDropWorkspace(workspace.id);
+        }}
+      >
         <div
           className={`workspace-item ${active ? "active" : ""} ${workspaceContextTargetId === workspace.id ? "context-target" : ""}`}
+          data-pinned-workspace-id={pinnedIndex === undefined ? undefined : workspace.id}
+          draggable={pinnedIndex !== undefined && !collapsed && !reorderingWorkspaceId}
+          aria-grabbed={pinnedIndex === undefined || collapsed ? undefined : draggingWorkspaceId === workspace.id}
+          onDragStart={pinnedIndex === undefined ? undefined : (event) => startPinnedDrag(workspace.id, event)}
+          onDragEnd={pinnedIndex === undefined ? undefined : stopPinnedDrag}
           onContextMenu={(event) => {
             event.preventDefault();
             onWorkspaceContextMenu(workspace, contextMenuPoint(event));
@@ -159,11 +320,35 @@ export function WorkspaceSidebar({
 
   return (
     <aside className={`workspace-sidebar ${collapsed ? "collapsed" : ""}`}>
-      <div className="sidebar-content">
+      <div className="sidebar-content" ref={sidebarContentRef}>
         {!collapsed && <div className="sidebar-section-label">Pinned</div>}
-        {pinned.map(renderWorkspace)}
+        <div
+          className="sidebar-pinned-list"
+          data-testid="pinned-workspace-list"
+          aria-busy={Boolean(reorderingWorkspaceId)}
+          onDragOver={dragOverPinned}
+          onDrop={dropPinned}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              setPinnedDropIndex(null);
+            }
+          }}
+        >
+          {pinned.map((workspace, index) => (
+            <Fragment key={workspace.id}>
+              {markerBeforeWorkspaceId === workspace.id && (
+                <div className="workspace-insertion-marker" data-drop-index={pinnedDropIndex ?? undefined} aria-hidden="true" />
+              )}
+              {renderWorkspace(workspace, index)}
+            </Fragment>
+          ))}
+          {markerAtEnd && (
+            <div className="workspace-insertion-marker" data-drop-index={pinnedDropIndex ?? undefined} aria-hidden="true" />
+          )}
+        </div>
+        {reorderError && !collapsed && <div className="sidebar-reorder-error" role="alert">{reorderError}</div>}
         {!collapsed && recent.length > 0 && <div className="sidebar-section-label recent-label">Recent</div>}
-        {recent.map(renderWorkspace)}
+        {recent.map((workspace) => renderWorkspace(workspace))}
         {workspaces.length === 0 && !collapsed && <p className="sidebar-empty">No workspaces yet.</p>}
       </div>
       <div className="sidebar-footer">
@@ -176,6 +361,13 @@ export function WorkspaceSidebar({
       </div>
     </aside>
   );
+}
+
+function messageFromReason(reason: unknown): string {
+  if (typeof reason === "object" && reason && "message" in reason) {
+    return String((reason as { message?: unknown }).message ?? reason);
+  }
+  return String(reason);
 }
 
 function orderedSidebarTerminals(workspace: Workspace): SidebarTerminal[] {

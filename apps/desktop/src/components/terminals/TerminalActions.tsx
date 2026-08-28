@@ -37,6 +37,7 @@ export function TerminalActions({
   onOpenLauncherSettings: () => void;
 }) {
   const runtimes = useAppStore((state) => state.runtimes);
+  const pendingStarts = useAppStore((state) => state.pendingStarts);
   const pendingConnections = useAppStore((state) => state.pendingConnections);
   const settings = useAppStore((state) => state.settings);
   const launcherProfiles = useAppStore((state) => state.launcherProfiles);
@@ -58,7 +59,8 @@ export function TerminalActions({
   const target = request?.target;
   const runtime = target ? runtimes[target.definition.id] : undefined;
   const isLive = Boolean(target && (
-    (pendingConnections[target.definition.id] ?? 0) > 0
+    Boolean(pendingStarts[target.definition.id])
+    || (pendingConnections[target.definition.id] ?? 0) > 0
     || runtime?.status === "starting"
     || runtime?.status === "running"
     || runtime?.status === "stopping"

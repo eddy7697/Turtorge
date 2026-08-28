@@ -45,6 +45,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app_bootstrap,
             commands::workspace_save,
+            commands::workspace_reorder,
+            commands::workspace_move_terminal,
             commands::workspace_open,
             commands::workspace_delete,
             commands::settings_update,

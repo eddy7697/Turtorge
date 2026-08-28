@@ -12,6 +12,8 @@ import type {
   TerminalStatus,
   TerminalDefinition,
   Workspace,
+  WorkspaceMoveTerminalRequest,
+  WorkspaceMoveTerminalResult,
   WslDistribution,
 } from "../types";
 
@@ -28,13 +30,17 @@ interface AppStore {
   launcherProfiles: LauncherProfileStatus[];
   runtimes: Record<string, TerminalRuntimeSnapshot>;
   startRequests: Record<string, number>;
+  pendingStarts: Record<string, boolean>;
   pendingConnections: Record<string, number>;
+  workspaceMovePending: boolean;
   errors: Record<string, string>;
   sidebarCollapsed: boolean;
   suppressTerminalCloseConfirm: boolean;
   initialize: () => Promise<void>;
   selectWorkspace: (id: string) => Promise<void>;
   saveWorkspace: (workspace: Workspace) => Promise<Workspace>;
+  reorderPinnedWorkspaces: (sourceId: string, targetIndex: number) => Promise<void>;
+  moveTerminalToWorkspace: (request: WorkspaceMoveTerminalRequest) => Promise<WorkspaceMoveTerminalResult>;
   duplicateTerminal: (workspaceId: string, terminalId: string) => Promise<TerminalDefinition>;
   deleteWorkspace: (id: string) => Promise<void>;
   updateSettings: (settings: AppSettings) => Promise<void>;
@@ -72,7 +78,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   launcherProfiles: [],
   runtimes: {},
   startRequests: {},
+  pendingStarts: {},
   pendingConnections: {},
+  workspaceMovePending: false,
   errors: {},
   sidebarCollapsed: false,
   suppressTerminalCloseConfirm: false,
@@ -127,6 +135,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
 
   saveWorkspace: async (workspace) => {
+    if (get().workspaceMovePending) {
+      throw new Error("Wait for the current terminal move to finish before changing a workspace.");
+    }
     const saved = await api.saveWorkspace(workspace);
     set((state) => {
       const exists = state.workspaces.some((item) => item.id === saved.id);
@@ -138,6 +149,56 @@ export const useAppStore = create<AppStore>((set, get) => ({
       };
     });
     return saved;
+  },
+
+  reorderPinnedWorkspaces: async (sourceId, targetIndex) => {
+    const current = get().workspaces;
+    const source = current.find((workspace) => workspace.id === sourceId);
+    if (!source?.pinned) throw new Error("Pinned workspace not found.");
+
+    const pinned = current.filter((workspace) => workspace.pinned);
+    const remaining = pinned.filter((workspace) => workspace.id !== sourceId);
+    const boundedTargetIndex = Number.isFinite(targetIndex)
+      ? Math.min(Math.max(Math.trunc(targetIndex), 0), remaining.length)
+      : remaining.length;
+    remaining.splice(boundedTargetIndex, 0, source);
+
+    let pinnedIndex = 0;
+    const next = current.map((workspace) => (
+      workspace.pinned ? remaining[pinnedIndex++] : workspace
+    ));
+    if (next.every((workspace, index) => workspace.id === current[index]?.id)) return;
+
+    const saved = await api.reorderWorkspaces(next.map((workspace) => workspace.id));
+    set({ workspaces: saved });
+  },
+
+  moveTerminalToWorkspace: async (request) => {
+    if (get().workspaceMovePending) {
+      throw new Error("Another terminal move is already in progress.");
+    }
+    set({ workspaceMovePending: true });
+    try {
+      const result = await api.moveTerminalToWorkspace(request);
+      set((state) => ({
+        workspaces: state.workspaces.map((workspace) => {
+          if (workspace.id === result.sourceWorkspace.id) return result.sourceWorkspace;
+          if (workspace.id === result.targetWorkspace.id) return result.targetWorkspace;
+          return workspace;
+        }),
+        activeWorkspaceId: result.targetWorkspace.id,
+        settings: {
+          ...state.settings,
+          lastActiveWorkspaceId: result.targetWorkspace.id,
+        },
+        runtimes: result.runtime
+          ? { ...state.runtimes, [result.runtime.definitionId]: result.runtime }
+          : state.runtimes,
+      }));
+      return result;
+    } finally {
+      set({ workspaceMovePending: false });
+    }
   },
 
   duplicateTerminal: async (workspaceId, terminalId) => {
@@ -226,8 +287,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
   removeRuntime: (definitionId) =>
     set((state) => {
       const runtimes = { ...state.runtimes };
+      const pendingStarts = { ...state.pendingStarts };
       delete runtimes[definitionId];
-      return { runtimes };
+      delete pendingStarts[definitionId];
+      return { runtimes, pendingStarts };
     }),
 
   requestTerminalStart: (definitionId) =>
@@ -236,15 +299,24 @@ export const useAppStore = create<AppStore>((set, get) => ({
         ...state.startRequests,
         [definitionId]: (state.startRequests[definitionId] ?? 0) + 1,
       },
+      pendingStarts: {
+        ...state.pendingStarts,
+        [definitionId]: true,
+      },
     })),
 
   beginTerminalConnection: (definitionId) =>
-    set((state) => ({
-      pendingConnections: {
+    set((state) => {
+      const pendingStarts = { ...state.pendingStarts };
+      delete pendingStarts[definitionId];
+      return {
+        pendingStarts,
+        pendingConnections: {
         ...state.pendingConnections,
         [definitionId]: (state.pendingConnections[definitionId] ?? 0) + 1,
-      },
-    })),
+        },
+      };
+    }),
 
   endTerminalConnection: (definitionId) =>
     set((state) => {

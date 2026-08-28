@@ -2,11 +2,12 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useResolvedTheme } from "../../app/ThemeProvider";
 import { attachTerminal, detachTerminal, resizeTerminal, startTerminal, writeTerminal, writeTerminalDefinition } from "../../lib/api";
 import { useAppStore } from "../../stores/appStore";
 import type { TerminalDefinition, TerminalEvent, Workspace } from "../../types";
+import { PersistentTerminalSlot, subscribeToTerminalSlot, terminalMountKey } from "./PersistentTerminalSlot";
 import { terminalKeySequence } from "./terminalKeymap";
 
 const terminalThemes = {
@@ -42,8 +43,13 @@ const terminalThemes = {
   },
 } as const;
 
-export function XtermView({ workspace, definition, activate, connectionGeneration, visible, focusRequest }: { workspace: Workspace; definition: TerminalDefinition; activate: boolean; connectionGeneration: number; visible: boolean; focusRequest?: number }) {
-  const containerRef = useRef<HTMLDivElement>(null);
+export function XtermView({ workspace, definition, activate, connectionGeneration, visible, focusRequest, mountKey }: { workspace: Workspace; definition: TerminalDefinition; activate: boolean; connectionGeneration: number; visible: boolean; focusRequest?: number; mountKey?: string }) {
+  const resolvedMountKey = mountKey ?? terminalMountKey(workspace.id, "standalone", definition.id);
+  const [host] = useState(() => {
+    const element = document.createElement("div");
+    element.className = "xterm-host";
+    return element;
+  });
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const resizeTimer = useRef<number | null>(null);
@@ -61,8 +67,29 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
   visibleRef.current = visible;
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    host.setAttribute("aria-label", `${definition.name} terminal`);
+  }, [definition.name, host]);
+
+  useLayoutEffect(() => {
+    let fitFrame: number | null = null;
+    const unsubscribe = subscribeToTerminalSlot(resolvedMountKey, (slot) => {
+      if (host.parentElement !== slot) slot.appendChild(host);
+      if (fitFrame !== null) cancelAnimationFrame(fitFrame);
+      fitFrame = requestAnimationFrame(() => {
+        fitRef.current?.fit();
+        const terminal = terminalRef.current;
+        if (!terminal || !visibleRef.current) return;
+        terminal.refresh(0, terminal.rows - 1);
+        terminal.focus();
+      });
+    });
+    return () => {
+      unsubscribe();
+      if (fitFrame !== null) cancelAnimationFrame(fitFrame);
+    };
+  }, [host, resolvedMountKey]);
+
+  useEffect(() => {
     setReady(false);
     const terminal = new Terminal({
       allowProposedApi: false,
@@ -78,7 +105,7 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.loadAddon(new WebLinksAddon());
-    terminal.open(container);
+    terminal.open(host);
     terminalRef.current = terminal;
     fitRef.current = fit;
     const initialFitFrame = requestAnimationFrame(() => {
@@ -125,7 +152,7 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
       if (resizeTimer.current) window.clearTimeout(resizeTimer.current);
       resizeTimer.current = window.setTimeout(() => fit.fit(), 40);
     });
-    observer.observe(container);
+    observer.observe(host);
 
     return () => {
       observer.disconnect();
@@ -134,13 +161,14 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
       selectionDisposable.dispose();
       resizeDisposable.dispose();
       terminal.dispose();
+      host.remove();
       terminalRef.current = null;
       fitRef.current = null;
       if (resizeTimer.current) window.clearTimeout(resizeTimer.current);
     };
     // Terminal instances intentionally survive theme changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [definition.id]);
+  }, [definition.id, host]);
 
   useEffect(() => {
     if (terminalRef.current) terminalRef.current.options.theme = terminalThemes[theme];
@@ -245,7 +273,7 @@ export function XtermView({ workspace, definition, activate, connectionGeneratio
     // Running terminal definitions and environment settings intentionally do not reconnect in place.
     // They take effect the next time the terminal is explicitly restarted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activate, beginTerminalConnection, connectionGeneration, definition.id, endTerminalConnection, ready, setRuntime, setRuntimeStatus, setTerminalError, workspace.id]);
+  }, [activate, beginTerminalConnection, connectionGeneration, definition.id, endTerminalConnection, ready, setRuntime, setRuntimeStatus, setTerminalError]);
 
-  return <div className="xterm-host" ref={containerRef} aria-label={`${definition.name} terminal`} />;
+  return mountKey ? null : <PersistentTerminalSlot mountKey={resolvedMountKey} />;
 }

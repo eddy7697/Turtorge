@@ -171,6 +171,24 @@ export function moveTerminal(
   });
 }
 
+export function insertTerminalIntoPane(
+  node: LayoutNode,
+  paneId: string,
+  terminalId: string,
+  targetIndex: number,
+): LayoutNode {
+  if (!findPane(node, paneId)) return node;
+  return mapPane(node, paneId, (pane) => {
+    const terminalIds = pane.terminalIds.filter((id) => id !== terminalId);
+    terminalIds.splice(clampIndex(targetIndex, terminalIds.length), 0, terminalId);
+    return {
+      ...pane,
+      terminalIds,
+      activeTerminalId: terminalId,
+    };
+  });
+}
+
 export function removePaneFromLayout(node: LayoutNode, paneId: string): LayoutNode {
   if (node.type === "pane") return node;
   if (node.first.type === "pane" && node.first.id === paneId) return node.second;

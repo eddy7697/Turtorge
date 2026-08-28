@@ -66,6 +66,7 @@ describe("TerminalActions", () => {
       runtimes: {},
       pendingConnections: {},
       startRequests: {},
+      pendingStarts: {},
       errors: {},
       launcherProfiles: [],
       windowsShells: [shell],

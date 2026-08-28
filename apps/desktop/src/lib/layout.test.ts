@@ -4,6 +4,7 @@ import {
   createPane,
   findPaneForTerminal,
   insertTerminalAfter,
+  insertTerminalIntoPane,
   moveTerminal,
   paneCount,
   removePaneFromLayout,
@@ -98,6 +99,17 @@ describe("layout tree", () => {
       expect(moved.first.activeTerminalId).toBe("c");
       expect(moved.second.terminalIds).toEqual(["d", "b", "e"]);
       expect(moved.second.activeTerminalId).toBe("b");
+    }
+  });
+
+  it("inserts an externally owned terminal into a target pane", () => {
+    const pane = createPane(["a", "b"]);
+    const inserted = insertTerminalIntoPane(pane, pane.id, "external", 1);
+
+    expect(inserted.type).toBe("pane");
+    if (inserted.type === "pane") {
+      expect(inserted.terminalIds).toEqual(["a", "external", "b"]);
+      expect(inserted.activeTerminalId).toBe("external");
     }
   });
 

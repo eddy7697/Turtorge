@@ -85,7 +85,7 @@ impl TerminalStream {
 
 struct ManagedTerminal {
     id: String,
-    workspace_id: String,
+    workspace_id: Mutex<String>,
     definition_id: String,
     process_id: Option<u32>,
     writer: Mutex<Box<dyn Write + Send>>,
@@ -106,7 +106,7 @@ impl ManagedTerminal {
         let (cols, rows) = *self.size.lock();
         TerminalRuntimeSnapshot {
             id: self.id.clone(),
-            workspace_id: self.workspace_id.clone(),
+            workspace_id: self.workspace_id.lock().clone(),
             definition_id: self.definition_id.clone(),
             process_id: self.process_id,
             status: self.status.lock().clone(),
@@ -121,10 +121,28 @@ impl ManagedTerminal {
 #[derive(Default)]
 pub struct TerminalManager {
     terminals: Mutex<HashMap<String, Arc<ManagedTerminal>>>,
+    definition_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl TerminalManager {
-    pub fn start(
+    pub fn start<F>(
+        &self,
+        mut request: TerminalStartRequest,
+        connection_id: String,
+        channel: Channel<TerminalEvent>,
+        preflight: F,
+    ) -> Result<TerminalRuntimeSnapshot, TurtorgeError>
+    where
+        F: FnOnce(&mut TerminalStartRequest) -> Result<(), TurtorgeError>,
+    {
+        let definition_id = request.definition.id.clone();
+        self.with_definition_lifecycle(&definition_id, || {
+            preflight(&mut request)?;
+            self.start_locked(request, connection_id, channel)
+        })
+    }
+
+    fn start_locked(
         &self,
         request: TerminalStartRequest,
         connection_id: String,
@@ -185,7 +203,7 @@ impl TerminalManager {
 
         let managed = Arc::new(ManagedTerminal {
             id: runtime_id.clone(),
-            workspace_id: request.workspace_id,
+            workspace_id: Mutex::new(request.workspace_id),
             definition_id: request.definition.id.clone(),
             process_id,
             writer: Mutex::new(writer),
@@ -284,6 +302,15 @@ impl TerminalManager {
 
     pub fn close(&self, runtime_id: &str) -> Result<(), TurtorgeError> {
         let terminal = self.get(runtime_id)?;
+        let definition_id = terminal.definition_id.clone();
+        self.with_definition_lifecycle(&definition_id, || self.close_locked(runtime_id, terminal))
+    }
+
+    fn close_locked(
+        &self,
+        runtime_id: &str,
+        terminal: Arc<ManagedTerminal>,
+    ) -> Result<(), TurtorgeError> {
         let should_terminate = {
             let mut status = terminal.status.lock();
             if matches!(
@@ -337,6 +364,106 @@ impl TerminalManager {
             .values()
             .map(|terminal| terminal.snapshot())
             .collect()
+    }
+
+    #[cfg(test)]
+    pub fn validate_definition_move(&self, definition_id: &str) -> Result<(), TurtorgeError> {
+        self.with_definition_lifecycle(definition_id, || {
+            self.validate_definition_move_locked(definition_id)
+        })
+    }
+
+    pub fn move_definition_transaction<T, F>(
+        &self,
+        definition_id: &str,
+        target_workspace_id: &str,
+        persist: F,
+    ) -> Result<(T, Option<TerminalRuntimeSnapshot>), TurtorgeError>
+    where
+        F: FnOnce() -> Result<T, TurtorgeError>,
+    {
+        self.with_definition_lifecycle(definition_id, || {
+            self.validate_definition_move_locked(definition_id)?;
+            let persisted = persist()?;
+            let runtime = self.rehome_definition_locked(definition_id, target_workspace_id);
+            Ok((persisted, runtime))
+        })
+    }
+
+    fn validate_definition_move_locked(&self, definition_id: &str) -> Result<(), TurtorgeError> {
+        let blocked_status = self
+            .terminals
+            .lock()
+            .values()
+            .filter(|terminal| terminal.definition_id == definition_id)
+            .find_map(|terminal| match *terminal.status.lock() {
+                TerminalStatus::Starting => Some("starting"),
+                TerminalStatus::Stopping => Some("stopping"),
+                TerminalStatus::Running | TerminalStatus::Exited | TerminalStatus::Failed => None,
+            });
+        if let Some(status) = blocked_status {
+            return Err(TurtorgeError::Validation(format!(
+                "Terminal {definition_id} cannot be moved between workspaces while its runtime is {status}"
+            )));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn rehome_definition(
+        &self,
+        definition_id: &str,
+        workspace_id: &str,
+    ) -> Option<TerminalRuntimeSnapshot> {
+        self.with_definition_lifecycle(definition_id, || {
+            self.rehome_definition_locked(definition_id, workspace_id)
+        })
+    }
+
+    fn rehome_definition_locked(
+        &self,
+        definition_id: &str,
+        workspace_id: &str,
+    ) -> Option<TerminalRuntimeSnapshot> {
+        let terminals = self
+            .terminals
+            .lock()
+            .values()
+            .filter(|terminal| terminal.definition_id == definition_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        if terminals.is_empty() {
+            return None;
+        }
+
+        for terminal in &terminals {
+            *terminal.workspace_id.lock() = workspace_id.to_owned();
+        }
+        terminals
+            .iter()
+            .find(|terminal| {
+                matches!(
+                    *terminal.status.lock(),
+                    TerminalStatus::Starting | TerminalStatus::Running | TerminalStatus::Stopping
+                )
+            })
+            .or_else(|| terminals.first())
+            .map(|terminal| terminal.snapshot())
+    }
+
+    fn with_definition_lifecycle<T>(
+        &self,
+        definition_id: &str,
+        operation: impl FnOnce() -> T,
+    ) -> T {
+        let lifecycle = self
+            .definition_locks
+            .lock()
+            .entry(definition_id.to_owned())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone();
+        let _guard = lifecycle.lock();
+        operation()
     }
 
     fn get(&self, runtime_id: &str) -> Result<Arc<ManagedTerminal>, TurtorgeError> {
@@ -577,9 +704,94 @@ fn spawn_waiter(
 #[cfg(test)]
 mod terminal_stream_tests {
     use super::*;
+    use crate::models::{ShellProfile, TerminalDefinition, WorkspacePath};
+    use std::sync::mpsc;
+
+    #[derive(Debug)]
+    struct TestKiller;
+
+    impl ChildKiller for TestKiller {
+        fn kill(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+            Box::new(Self)
+        }
+    }
 
     fn test_channel() -> Channel<TerminalEvent> {
         Channel::new(|_| Ok(()))
+    }
+
+    fn test_managed_terminal(
+        runtime_id: &str,
+        definition_id: &str,
+        status: TerminalStatus,
+    ) -> Arc<ManagedTerminal> {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("test PTY should open");
+        let writer = pair
+            .master
+            .take_writer()
+            .expect("test PTY writer should open");
+        drop(pair.slave);
+        Arc::new(ManagedTerminal {
+            id: runtime_id.to_owned(),
+            workspace_id: Mutex::new("workspace-source".to_owned()),
+            definition_id: definition_id.to_owned(),
+            process_id: Some(42),
+            writer: Mutex::new(writer),
+            master: Mutex::new(pair.master),
+            killer: Mutex::new(Box::new(TestKiller)),
+            stream: Arc::new(TerminalStream::new(
+                "connection-before-move".to_owned(),
+                test_channel(),
+            )),
+            status: Mutex::new(status),
+            exit_code: Mutex::new(None),
+            size: Mutex::new((80, 24)),
+        })
+    }
+
+    fn test_start_request(definition_id: &str) -> TerminalStartRequest {
+        TerminalStartRequest {
+            workspace_id: "workspace-source".to_owned(),
+            definition: TerminalDefinition {
+                id: definition_id.to_owned(),
+                name: definition_id.to_owned(),
+                profile: TerminalProfileKind::Shell,
+                shell_profile: ShellProfile {
+                    id: "unused-shell".to_owned(),
+                    name: "Unused shell".to_owned(),
+                    kind: ShellKind::Native,
+                    executable: "unused".to_owned(),
+                    version: None,
+                    distribution: None,
+                    shell: None,
+                    login_shell: false,
+                    available: true,
+                },
+                working_directory: WorkspacePath {
+                    kind: PathKind::Native,
+                    value: "unused".to_owned(),
+                    distribution: None,
+                },
+                startup_command: None,
+                environment_variables: Vec::new(),
+                auto_start: false,
+                launcher_profile_id: None,
+            },
+            workspace_environment: Vec::new(),
+            cols: 80,
+            rows: 24,
+        }
     }
 
     #[test]
@@ -608,6 +820,197 @@ mod terminal_stream_tests {
 
         stream.detach("replacement");
         assert!(stream.subscriber.lock().is_none());
+    }
+
+    #[test]
+    fn rehome_definition_preserves_the_managed_runtime_and_stream() {
+        let manager = TerminalManager::default();
+        let managed = test_managed_terminal("runtime-1", "terminal-1", TerminalStatus::Running);
+        manager
+            .terminals
+            .lock()
+            .insert(managed.id.clone(), managed.clone());
+
+        let snapshot = manager
+            .rehome_definition("terminal-1", "workspace-target")
+            .expect("managed runtime should be returned");
+        let after = manager.get("runtime-1").unwrap();
+
+        assert_eq!(snapshot.id, "runtime-1");
+        assert_eq!(snapshot.workspace_id, "workspace-target");
+        assert_eq!(snapshot.definition_id, "terminal-1");
+        assert_eq!(snapshot.process_id, Some(42));
+        assert_eq!((snapshot.cols, snapshot.rows), (80, 24));
+        assert!(matches!(snapshot.status, TerminalStatus::Running));
+        assert!(Arc::ptr_eq(&managed, &after));
+        assert_eq!(after.workspace_id.lock().as_str(), "workspace-target");
+        assert_eq!(after.process_id, Some(42));
+        assert_eq!(
+            after
+                .stream
+                .subscriber
+                .lock()
+                .as_ref()
+                .map(|subscriber| subscriber.connection_id.as_str()),
+            Some("connection-before-move")
+        );
+        assert!(
+            TerminalManager::default()
+                .rehome_definition("terminal-without-runtime", "workspace-target")
+                .is_none()
+        );
+
+        *managed.status.lock() = TerminalStatus::Exited;
+    }
+
+    #[test]
+    fn definition_move_guard_allows_stable_runtimes_and_blocks_any_transitioning_runtime() {
+        let manager = TerminalManager::default();
+        assert!(
+            manager
+                .validate_definition_move("terminal-without-runtime")
+                .is_ok()
+        );
+
+        let primary =
+            test_managed_terminal("runtime-primary", "terminal-1", TerminalStatus::Running);
+        manager
+            .terminals
+            .lock()
+            .insert(primary.id.clone(), primary.clone());
+        for status in [
+            TerminalStatus::Running,
+            TerminalStatus::Exited,
+            TerminalStatus::Failed,
+        ] {
+            *primary.status.lock() = status;
+            assert!(manager.validate_definition_move("terminal-1").is_ok());
+        }
+
+        let sibling =
+            test_managed_terminal("runtime-sibling", "terminal-1", TerminalStatus::Running);
+        manager
+            .terminals
+            .lock()
+            .insert(sibling.id.clone(), sibling.clone());
+
+        *primary.status.lock() = TerminalStatus::Starting;
+        let starting = manager
+            .validate_definition_move("terminal-1")
+            .expect_err("a starting runtime must block the move");
+        assert!(matches!(
+            starting,
+            TurtorgeError::Validation(message)
+                if message.contains("terminal-1") && message.contains("starting")
+        ));
+
+        *primary.status.lock() = TerminalStatus::Running;
+        *sibling.status.lock() = TerminalStatus::Stopping;
+        let stopping = manager
+            .validate_definition_move("terminal-1")
+            .expect_err("a stopping runtime must block the move");
+        assert!(matches!(
+            stopping,
+            TurtorgeError::Validation(message)
+                if message.contains("terminal-1") && message.contains("stopping")
+        ));
+
+        *primary.status.lock() = TerminalStatus::Exited;
+        *sibling.status.lock() = TerminalStatus::Exited;
+    }
+
+    #[test]
+    fn definition_lifecycle_serializes_the_full_move_and_keeps_other_definitions_parallel() {
+        let manager = Arc::new(TerminalManager::default());
+        let managed = test_managed_terminal("runtime-1", "terminal-1", TerminalStatus::Running);
+        manager
+            .terminals
+            .lock()
+            .insert(managed.id.clone(), managed.clone());
+
+        let (persist_entered_tx, persist_entered_rx) = mpsc::channel();
+        let (persist_release_tx, persist_release_rx) = mpsc::channel();
+        let move_manager = manager.clone();
+        let move_handle = thread::spawn(move || {
+            move_manager.move_definition_transaction("terminal-1", "workspace-target", || {
+                persist_entered_tx.send(()).unwrap();
+                persist_release_rx.recv().unwrap();
+                Ok("persisted")
+            })
+        });
+        persist_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("move persistence closure should start");
+
+        let (same_attempted_tx, same_attempted_rx) = mpsc::channel();
+        let (same_entered_tx, same_entered_rx) = mpsc::channel();
+        let same_manager = manager.clone();
+        let observing_manager = manager.clone();
+        let same_handle = thread::spawn(move || {
+            same_attempted_tx.send(()).unwrap();
+            let result = same_manager.start(
+                test_start_request("terminal-1"),
+                "race-test-connection".to_owned(),
+                test_channel(),
+                move |_| {
+                    let workspace_id = observing_manager
+                        .get("runtime-1")
+                        .unwrap()
+                        .workspace_id
+                        .lock()
+                        .clone();
+                    same_entered_tx.send(workspace_id).unwrap();
+                    Err(TurtorgeError::Validation(
+                        "intentional preflight stop".to_owned(),
+                    ))
+                },
+            );
+            assert!(matches!(
+                result,
+                Err(TurtorgeError::Validation(message))
+                    if message == "intentional preflight stop"
+            ));
+        });
+        same_attempted_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("same-definition contender should attempt the lifecycle lock");
+        let same_definition_was_blocked = matches!(
+            same_entered_rx.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        );
+
+        let (other_entered_tx, other_entered_rx) = mpsc::channel();
+        let other_manager = manager.clone();
+        let other_handle = thread::spawn(move || {
+            other_manager
+                .move_definition_transaction("terminal-2", "workspace-other", || {
+                    other_entered_tx.send(()).unwrap();
+                    Ok(())
+                })
+                .unwrap();
+        });
+        let other_definition_ran_in_parallel = other_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .is_ok();
+
+        persist_release_tx.send(()).unwrap();
+        let (persisted, runtime) = move_handle.join().unwrap().unwrap();
+        let observed_workspace = same_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("same-definition contender should run after the move transaction");
+        same_handle.join().unwrap();
+        other_handle.join().unwrap();
+
+        assert!(same_definition_was_blocked);
+        assert!(other_definition_ran_in_parallel);
+        assert_eq!(persisted, "persisted");
+        assert_eq!(
+            runtime.map(|snapshot| snapshot.workspace_id),
+            Some("workspace-target".to_owned())
+        );
+        assert_eq!(observed_workspace, "workspace-target");
+
+        *managed.status.lock() = TerminalStatus::Exited;
     }
 }
 
@@ -771,6 +1174,7 @@ mod macos_integration_tests {
                 native_test_request(shell),
                 "force-close-test".to_owned(),
                 Channel::new(|_| Ok(())),
+                |_| Ok(()),
             )
             .expect("native terminal should start");
         let terminal = manager
@@ -814,6 +1218,7 @@ mod macos_integration_tests {
                 request,
                 "foreground-close-test".to_owned(),
                 Channel::new(|_| Ok(())),
+                |_| Ok(()),
             )
             .expect("native terminal should start");
         let terminal = manager

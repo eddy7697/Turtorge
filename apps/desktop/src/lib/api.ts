@@ -8,15 +8,19 @@ import type {
   LauncherOpenRequest,
   LauncherProfile,
   LauncherValidationResult,
+  LayoutNode,
   ShellProfile,
   TerminalEvent,
   TerminalRuntimeSnapshot,
   TerminalStartRequest,
   Workspace,
+  WorkspaceMoveTerminalRequest,
+  WorkspaceMoveTerminalResult,
   WorkspacePath,
   WslDistribution,
   WslShellDetection,
 } from "../types";
+import { findPane, insertTerminalIntoPane, removeTerminalFromLayout } from "./layout";
 
 export const isTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 
@@ -240,6 +244,107 @@ export async function saveWorkspace(workspace: Workspace): Promise<Workspace> {
   if (index >= 0) mockWorkspaces[index] = structuredClone(workspace);
   else mockWorkspaces.push(structuredClone(workspace));
   return workspace;
+}
+
+export async function reorderWorkspaces(orderedIds: string[]): Promise<Workspace[]> {
+  if (isTauri()) return invoke("workspace_reorder", { orderedIds });
+
+  const requestedIds = new Set(orderedIds);
+  const currentIds = new Set(mockWorkspaces.map((workspace) => workspace.id));
+  const validOrder = orderedIds.length === mockWorkspaces.length
+    && requestedIds.size === orderedIds.length
+    && orderedIds.every((id) => currentIds.has(id));
+  if (!validOrder) {
+    throw new Error("Workspace order must contain every workspace exactly once.");
+  }
+
+  const workspacesById = new Map(mockWorkspaces.map((workspace) => [workspace.id, workspace]));
+  mockWorkspaces = orderedIds.map((id) => structuredClone(workspacesById.get(id)!));
+  return structuredClone(mockWorkspaces);
+}
+
+export async function moveTerminalToWorkspace(
+  request: WorkspaceMoveTerminalRequest,
+): Promise<WorkspaceMoveTerminalResult> {
+  if (isTauri()) return invoke("workspace_move_terminal", { request });
+  if (request.sourceWorkspaceId === request.targetWorkspaceId) {
+    throw new Error("Source and target workspaces must be different.");
+  }
+
+  const sourceIndex = mockWorkspaces.findIndex(({ id }) => id === request.sourceWorkspaceId);
+  const targetIndex = mockWorkspaces.findIndex(({ id }) => id === request.targetWorkspaceId);
+  if (sourceIndex < 0 || targetIndex < 0) throw new Error("Workspace not found.");
+  const currentRuntime = mockRuntimes.get(request.terminalId);
+  if (currentRuntime?.status === "starting" || currentRuntime?.status === "stopping") {
+    throw new Error("Wait for this terminal runtime transition to finish before moving it.");
+  }
+
+  const source = structuredClone(mockWorkspaces[sourceIndex]);
+  const target = structuredClone(mockWorkspaces[targetIndex]);
+  const sourcePane = findPane(source.layout, request.sourcePaneId);
+  const targetPane = findPane(target.layout, request.targetPaneId);
+  const definitionIndex = source.terminals.findIndex(({ id }) => id === request.terminalId);
+  const definitionOccurrences = mockWorkspaces.reduce(
+    (count, workspace) => count + workspace.terminals.filter(({ id }) => id === request.terminalId).length,
+    0,
+  );
+  const sourceAssignments = terminalAssignmentCount(source.layout, request.terminalId);
+  const assignmentsOutsideSource = mockWorkspaces.some((workspace) =>
+    workspace.id !== source.id && terminalAssignmentCount(workspace.layout, request.terminalId) > 0);
+  if (!sourcePane?.terminalIds.includes(request.terminalId) || !targetPane) {
+    throw new Error("Terminal pane not found.");
+  }
+  if (
+    definitionIndex < 0
+    || definitionOccurrences !== 1
+    || sourceAssignments !== 1
+    || assignmentsOutsideSource
+  ) {
+    throw new Error("Terminal ownership is invalid.");
+  }
+  if (
+    !Number.isSafeInteger(request.targetIndex)
+    || request.targetIndex < 0
+    || request.targetIndex > targetPane.terminalIds.length
+  ) {
+    throw new Error("Terminal target index is invalid.");
+  }
+
+  const definition = source.terminals[definitionIndex];
+  if (!definition) throw new Error("Terminal definition not found.");
+  source.terminals.splice(definitionIndex, 1);
+  source.layout = removeTerminalFromLayout(source.layout, request.terminalId);
+  target.terminals.push(definition);
+  target.layout = insertTerminalIntoPane(
+    target.layout,
+    request.targetPaneId,
+    request.terminalId,
+    request.targetIndex,
+  );
+  const now = new Date().toISOString();
+  source.updatedAt = now;
+  target.updatedAt = now;
+  target.lastOpenedAt = now;
+  target.openCount += 1;
+  mockWorkspaces = mockWorkspaces.map((workspace, index) => {
+    if (index === sourceIndex) return source;
+    if (index === targetIndex) return target;
+    return workspace;
+  });
+
+  const runtime = currentRuntime
+    ? { ...currentRuntime, workspaceId: request.targetWorkspaceId }
+    : null;
+  if (runtime) mockRuntimes.set(request.terminalId, runtime);
+  return structuredClone({ sourceWorkspace: source, targetWorkspace: target, runtime });
+}
+
+function terminalAssignmentCount(node: LayoutNode, terminalId: string): number {
+  if (node.type === "pane") {
+    return node.terminalIds.filter((id) => id === terminalId).length;
+  }
+  return terminalAssignmentCount(node.first, terminalId)
+    + terminalAssignmentCount(node.second, terminalId);
 }
 
 export async function openWorkspace(id: string): Promise<Workspace> {

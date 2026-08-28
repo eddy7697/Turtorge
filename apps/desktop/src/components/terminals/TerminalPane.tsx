@@ -7,7 +7,7 @@ import { LauncherSetupDialog } from "../dialogs/LauncherSetupDialog";
 import { ContextMenu, contextMenuPoint, type ContextMenuPoint } from "../ui/ContextMenu";
 import { LauncherLogo } from "../ui/LauncherLogo";
 import { Modal } from "../ui/Modal";
-import { XtermView } from "./XtermView";
+import { PersistentTerminalSlot, terminalMountKey } from "./PersistentTerminalSlot";
 
 export function TerminalPane({
   pane,
@@ -53,6 +53,7 @@ export function TerminalPane({
   const runtimes = useAppStore((state) => state.runtimes);
   const errors = useAppStore((state) => state.errors);
   const startRequests = useAppStore((state) => state.startRequests);
+  const pendingStarts = useAppStore((state) => state.pendingStarts);
   const pendingConnections = useAppStore((state) => state.pendingConnections);
   const settings = useAppStore((state) => state.settings);
   const launcherProfiles = useAppStore((state) => state.launcherProfiles);
@@ -80,7 +81,10 @@ export function TerminalPane({
   const error = active ? errors[active.id] : undefined;
   const transitioning = definitions.some((definition) => {
     const status = runtimes[definition.id]?.status;
-    return status === "starting" || status === "stopping" || (pendingConnections[definition.id] ?? 0) > 0;
+    return status === "starting"
+      || status === "stopping"
+      || Boolean(pendingStarts[definition.id])
+      || (pendingConnections[definition.id] ?? 0) > 0;
   });
   const runningCount = definitions.filter((definition) => runtimes[definition.id]?.status === "running").length;
   const activeLauncherId = active?.launcherProfileId ?? settings.defaultLauncherProfileId ?? null;
@@ -213,6 +217,7 @@ export function TerminalPane({
   const dragOverSurface = (event: ReactDragEvent<HTMLDivElement>) => {
     if (!dragging) return;
     event.preventDefault();
+    event.stopPropagation();
     event.dataTransfer.dropEffect = "move";
     const count = definitions.filter((definition) => definition.id !== dragging.terminalId).length;
     onTabDragOver(pane.id, count);
@@ -221,6 +226,7 @@ export function TerminalPane({
   const dropOnSurface = (event: ReactDragEvent<HTMLDivElement>) => {
     if (!dragging) return;
     event.preventDefault();
+    event.stopPropagation();
     const count = definitions.filter((definition) => definition.id !== dragging.terminalId).length;
     onTabDrop(pane.id, count);
   };
@@ -273,7 +279,7 @@ export function TerminalPane({
                   onDragEnd={onTabDragEnd}
                   title="Drag to move · Double-click to rename"
                 >
-                  <span className={`runtime-dot ${itemRuntime?.status ?? ((pendingConnections[definition.id] ?? 0) > 0 ? "starting" : "idle")}`} />
+                  <span className={`runtime-dot ${itemRuntime?.status ?? (pendingStarts[definition.id] || (pendingConnections[definition.id] ?? 0) > 0 ? "starting" : "idle")}`} />
                   <span>{definition.name}</span>
                   <span className="tab-shell">{definition.shellProfile.shell?.split("/").pop() ?? definition.shellProfile.version?.split(".")[0] ?? "PS"}</span>
                 </button>
@@ -305,13 +311,8 @@ export function TerminalPane({
                   data-terminal-view={definition.id}
                   aria-hidden={!isVisible}
                 >
-                  <XtermView
-                    workspace={workspace}
-                    definition={definition}
-                    activate={Boolean(runtimes[definition.id]) || Boolean(startRequests[definition.id])}
-                    connectionGeneration={startRequests[definition.id] ?? 0}
-                    visible={isVisible}
-                    focusRequest={isVisible && terminalFocusRequest?.terminalId === definition.id ? terminalFocusRequest.sequence : undefined}
+                  <PersistentTerminalSlot
+                    mountKey={terminalMountKey(workspace.id, pane.id, definition.id)}
                   />
                 </div>
               );

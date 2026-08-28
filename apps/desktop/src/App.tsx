@@ -1,7 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { FolderOpen, Pencil, Plus } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import { ThemeProvider } from "./app/ThemeProvider";
 import { ConfirmQuitDialog } from "./components/dialogs/ConfirmQuitDialog";
 import { CreateWorkspaceDialog } from "./components/dialogs/CreateWorkspaceDialog";
@@ -13,6 +13,7 @@ import { StatusBar } from "./components/shell/StatusBar";
 import { TitleBar } from "./components/shell/TitleBar";
 import { WorkspaceHeader } from "./components/shell/WorkspaceHeader";
 import { WorkspaceSidebar } from "./components/shell/WorkspaceSidebar";
+import { PersistentTerminalDeck } from "./components/terminals/PersistentTerminalDeck";
 import { TerminalWorkspace } from "./components/terminals/TerminalWorkspace";
 import { TerminalActions, type TerminalActionRequest } from "./components/terminals/TerminalActions";
 import { ContextMenu, type ContextMenuPoint } from "./components/ui/ContextMenu";
@@ -29,6 +30,13 @@ import {
   splitPane,
   updateSplitRatio,
 } from "./lib/layout";
+import {
+  writeTerminalTabDrag,
+  terminalMoveIsTransitioning,
+  workspaceEndDropTarget,
+  type TerminalTabDrag,
+  type TerminalTabDropTarget,
+} from "./lib/terminalDrag";
 import { selectActiveWorkspace, useAppStore } from "./stores/appStore";
 import type { SplitDirection, TerminalDefinition, TerminalEvent, Workspace } from "./types";
 
@@ -39,7 +47,7 @@ export default function App() {
   return <ThemeProvider preference={settings.theme}><TurtorgeApp /></ThemeProvider>;
 }
 
-function TurtorgeApp() {
+export function TurtorgeApp() {
   const initialized = useAppStore((state) => state.initialized);
   const loading = useAppStore((state) => state.loading);
   const workspaces = useAppStore((state) => state.workspaces);
@@ -52,11 +60,15 @@ function TurtorgeApp() {
   const launcherProfiles = useAppStore((state) => state.launcherProfiles);
   const runtimes = useAppStore((state) => state.runtimes);
   const errors = useAppStore((state) => state.errors);
+  const pendingStarts = useAppStore((state) => state.pendingStarts);
   const pendingConnections = useAppStore((state) => state.pendingConnections);
+  const workspaceMovePending = useAppStore((state) => state.workspaceMovePending);
   const sidebarCollapsed = useAppStore((state) => state.sidebarCollapsed);
   const initialize = useAppStore((state) => state.initialize);
   const selectWorkspace = useAppStore((state) => state.selectWorkspace);
   const saveWorkspace = useAppStore((state) => state.saveWorkspace);
+  const reorderPinnedWorkspaces = useAppStore((state) => state.reorderPinnedWorkspaces);
+  const moveTerminalToWorkspace = useAppStore((state) => state.moveTerminalToWorkspace);
   const duplicateTerminal = useAppStore((state) => state.duplicateTerminal);
   const deleteWorkspace = useAppStore((state) => state.deleteWorkspace);
   const updateSettings = useAppStore((state) => state.updateSettings);
@@ -64,6 +76,8 @@ function TurtorgeApp() {
   const setRuntime = useAppStore((state) => state.setRuntime);
   const setRuntimeStatus = useAppStore((state) => state.setRuntimeStatus);
   const setTerminalError = useAppStore((state) => state.setTerminalError);
+  const beginTerminalConnection = useAppStore((state) => state.beginTerminalConnection);
+  const endTerminalConnection = useAppStore((state) => state.endTerminalConnection);
   const requestTerminalStart = useAppStore((state) => state.requestTerminalStart);
   const removeRuntime = useAppStore((state) => state.removeRuntime);
   const [dialog, setDialog] = useState<DialogName>(null);
@@ -73,11 +87,22 @@ function TurtorgeApp() {
   const [renamingWorkspace, setRenamingWorkspace] = useState<Workspace | null>(null);
   const [layoutError, setLayoutError] = useState<string | null>(null);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState<{ terminalId: string; sequence: number } | null>(null);
+  const [terminalDrag, setTerminalDrag] = useState<TerminalTabDrag | null>(null);
+  const [terminalDropTarget, setTerminalDropTarget] = useState<TerminalTabDropTarget | null>(null);
+  const [dragPreviewWorkspaceId, setDragPreviewWorkspaceId] = useState<string | null>(null);
   const terminalFocusSequence = useRef(0);
   const autoStartAttempted = useRef(new Set<string>());
+  const terminalDragRef = useRef<TerminalTabDrag | null>(null);
+  const previewTimerRef = useRef<number | null>(null);
+  const previewCandidateRef = useRef<string | null>(null);
+  const terminalDropInFlightRef = useRef(false);
 
   useEffect(() => { void initialize(); }, [initialize]);
   useEffect(() => { setLayoutError(null); }, [workspace?.id]);
+
+  useEffect(() => () => {
+    if (previewTimerRef.current !== null) window.clearTimeout(previewTimerRef.current);
+  }, []);
 
   const requestQuit = useCallback(() => {
     const running = Object.values(useAppStore.getState().runtimes).filter((runtime) => runtime.status === "running" || runtime.status === "starting");
@@ -125,15 +150,17 @@ function TurtorgeApp() {
         else if (event.event === "exited") setRuntimeStatus(definition.id, "exited", event.data.exitCode);
         else if (event.event === "error") setTerminalError(definition.id, event.data.message);
       };
+      beginTerminalConnection(definition.id);
       void startTerminal(
         { workspaceId: workspace.id, definition, workspaceEnvironment: workspace.environmentVariables, cols: 80, rows: 24 },
         `auto-start:${definition.id}:${crypto.randomUUID()}`,
         onEvent,
       )
         .then(setRuntime)
-        .catch((error) => setTerminalError(definition.id, String(error?.message ?? error)));
+        .catch((error) => setTerminalError(definition.id, String(error?.message ?? error)))
+        .finally(() => endTerminalConnection(definition.id));
     }
-  }, [runtimes, setRuntime, setRuntimeStatus, setTerminalError, workspace]);
+  }, [beginTerminalConnection, endTerminalConnection, runtimes, setRuntime, setRuntimeStatus, setTerminalError, workspace]);
 
   const persist = async (next: Workspace) => { await saveWorkspace({ ...next, updatedAt: new Date().toISOString() }); };
   const persistLayout = async (next: Workspace) => {
@@ -187,6 +214,156 @@ function TurtorgeApp() {
       layout: moveTerminal(targetWorkspace.layout, sourcePaneId, targetPaneId, terminalId, targetIndex),
     });
   };
+  const clearPreviewTimer = () => {
+    if (previewTimerRef.current !== null) {
+      window.clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+    previewCandidateRef.current = null;
+  };
+  const clearTerminalDrag = (clearPreview = true) => {
+    clearPreviewTimer();
+    terminalDragRef.current = null;
+    setTerminalDrag(null);
+    setTerminalDropTarget(null);
+    if (clearPreview) setDragPreviewWorkspaceId(null);
+  };
+  const beginTerminalDrag = (
+    drag: TerminalTabDrag,
+    event: ReactDragEvent<HTMLButtonElement>,
+  ) => {
+    if (terminalDropInFlightRef.current) {
+      event.preventDefault();
+      setLayoutError("Wait for the current terminal move to finish before starting another one.");
+      return;
+    }
+
+    const latest = useAppStore.getState();
+    const sourceWorkspace = latest.workspaces.find((item) => item.id === drag.sourceWorkspaceId);
+    const sourcePane = sourceWorkspace ? findPane(sourceWorkspace.layout, drag.sourcePaneId) : undefined;
+    const runtime = latest.runtimes[drag.terminalId];
+    const blocked = terminalMoveIsTransitioning(
+      runtime,
+      latest.pendingConnections[drag.terminalId] ?? 0,
+      Boolean(latest.pendingStarts[drag.terminalId]),
+    );
+    if (!sourceWorkspace || !sourcePane?.terminalIds.includes(drag.terminalId) || blocked) {
+      event.preventDefault();
+      setLayoutError(blocked
+        ? "Wait for this terminal to finish starting, stopping, or reconnecting before moving it."
+        : "The terminal is no longer available in its source pane.");
+      return;
+    }
+
+    clearTerminalDrag();
+    writeTerminalTabDrag(event.dataTransfer, drag);
+    terminalDragRef.current = drag;
+    setTerminalDrag(drag);
+    setLayoutError(null);
+  };
+  const terminalDropAtWorkspaceEnd = (workspaceId: string): TerminalTabDropTarget | null => {
+    const drag = terminalDragRef.current;
+    if (!drag) return null;
+    return workspaceEndDropTarget(useAppStore.getState().workspaces, drag, workspaceId);
+  };
+  const previewTerminalDropWorkspace = (workspaceId: string) => {
+    const target = terminalDropAtWorkspaceEnd(workspaceId);
+    if (!target) return;
+    setTerminalDropTarget(target);
+    if (workspaceId === workspace?.id) {
+      clearPreviewTimer();
+      setDragPreviewWorkspaceId(null);
+      return;
+    }
+    if (workspaceId === dragPreviewWorkspaceId) return;
+    if (previewCandidateRef.current === workspaceId) return;
+    clearPreviewTimer();
+    previewCandidateRef.current = workspaceId;
+    previewTimerRef.current = window.setTimeout(() => {
+      previewTimerRef.current = null;
+      previewCandidateRef.current = null;
+      if (!terminalDragRef.current) return;
+      setDragPreviewWorkspaceId(workspaceId);
+    }, 600);
+  };
+  const cancelTerminalDropWorkspacePreview = (workspaceId: string) => {
+    if (previewCandidateRef.current === workspaceId) clearPreviewTimer();
+    setTerminalDropTarget((target) => target?.workspaceId === workspaceId ? null : target);
+  };
+  const finishTerminalDrop = async (target: TerminalTabDropTarget) => {
+    const drag = terminalDragRef.current;
+    if (!drag || terminalDropInFlightRef.current) return;
+    const latest = useAppStore.getState();
+    if (terminalMoveIsTransitioning(
+      latest.runtimes[drag.terminalId],
+      latest.pendingConnections[drag.terminalId] ?? 0,
+      Boolean(latest.pendingStarts[drag.terminalId]),
+    )) {
+      setLayoutError("Wait for this terminal to finish starting, stopping, or reconnecting before moving it.");
+      clearTerminalDrag();
+      return;
+    }
+    terminalDropInFlightRef.current = true;
+    clearPreviewTimer();
+    setDragPreviewWorkspaceId(
+      target.workspaceId === latest.activeWorkspaceId ? null : target.workspaceId,
+    );
+    terminalDragRef.current = null;
+    setTerminalDrag(null);
+    setTerminalDropTarget(null);
+
+    try {
+      if (drag.sourceWorkspaceId === target.workspaceId) {
+        const latestWorkspace = useAppStore.getState().workspaces.find((item) => item.id === target.workspaceId);
+        if (!latestWorkspace) throw new Error("Workspace not found.");
+        await moveTerminalTab(
+          latestWorkspace,
+          drag.sourcePaneId,
+          target.paneId,
+          drag.terminalId,
+          target.index,
+        );
+      } else {
+        await moveTerminalToWorkspace({
+          sourceWorkspaceId: drag.sourceWorkspaceId,
+          sourcePaneId: drag.sourcePaneId,
+          targetWorkspaceId: target.workspaceId,
+          targetPaneId: target.paneId,
+          terminalId: drag.terminalId,
+          targetIndex: target.index,
+        });
+        try {
+          await updateSettings({
+            ...useAppStore.getState().settings,
+            lastActiveWorkspaceId: target.workspaceId,
+          });
+        } catch (reason) {
+          window.setTimeout(() => setLayoutError(
+            `Terminal moved, but the last active workspace preference could not be saved: ${messageFromReason(reason)}`,
+          ));
+        }
+      }
+
+      terminalFocusSequence.current += 1;
+      setTerminalFocusRequest({
+        terminalId: drag.terminalId,
+        sequence: terminalFocusSequence.current,
+      });
+    } catch (reason) {
+      setLayoutError(messageFromReason(reason));
+    } finally {
+      terminalDropInFlightRef.current = false;
+      setDragPreviewWorkspaceId(null);
+    }
+  };
+  const endTerminalDrag = () => {
+    if (terminalDropInFlightRef.current) return;
+    clearTerminalDrag();
+  };
+  const dropTerminalOnWorkspace = (workspaceId: string) => {
+    const target = terminalDropAtWorkspaceEnd(workspaceId);
+    if (target) void finishTerminalDrop(target);
+  };
   const deletePane = async (targetWorkspace: Workspace, paneId: string) => {
     if (paneCount(targetWorkspace.layout) <= 1) return;
     const pane = findPane(targetWorkspace.layout, paneId);
@@ -196,7 +373,10 @@ function TurtorgeApp() {
       .filter((terminal): terminal is TerminalDefinition => Boolean(terminal));
     const transitioning = definitions.some((definition) => {
       const status = runtimes[definition.id]?.status;
-      return status === "starting" || status === "stopping" || (pendingConnections[definition.id] ?? 0) > 0;
+      return status === "starting"
+        || status === "stopping"
+        || Boolean(pendingStarts[definition.id])
+        || (pendingConnections[definition.id] ?? 0) > 0;
     });
     if (transitioning) {
       const reason = new Error("Wait for terminals to finish starting or stopping, then try again.");
@@ -286,40 +466,78 @@ function TurtorgeApp() {
   })).length;
   const newTerminalWorkspace = workspaces.find((item) => item.id === newTerminalTarget?.workspaceId);
   const terminalContextTargetId = terminalActionRequest?.kind === "menu" ? terminalActionRequest.target.definition.id : null;
+  const previewWorkspace = workspaces.find((item) => item.id === dragPreviewWorkspaceId);
+  const visibleWorkspace = previewWorkspace ?? workspace;
+  const visibleWorkspaceId = visibleWorkspace?.id ?? null;
 
   if (!initialized || loading) return <div className="boot-screen"><img src="/logo.png" alt="Turtorge" /><span className="loading-line" /><div className="boot-status" role="status" aria-live="polite"><strong>Preparing your terminal environments…</strong><small>Detecting available shells quietly in the background.</small></div></div>;
 
   return (
     <div className={`app-shell platform-${platform}`}>
       <TitleBar platform={platform} sidebarCollapsed={sidebarCollapsed} onToggleSidebar={toggleSidebar} onQuickOpen={() => setDialog("quickOpen")} onNewTerminal={() => openNewTerminal(workspace)} onSettings={() => setDialog("settings")} onRequestQuit={requestQuit} />
-      <div className="app-body">
-        <WorkspaceSidebar workspaces={workspaces} activeWorkspaceId={workspace?.id ?? null} runtimes={runtimes} errors={errors} pendingConnections={pendingConnections} collapsed={sidebarCollapsed} onSelect={(id) => void selectWorkspace(id)} onSelectTerminal={(workspaceId, paneId, terminalId) => void selectSidebarTerminal(workspaceId, paneId, terminalId).catch(() => undefined)} workspaceContextTargetId={workspaceMenu?.workspace.id ?? null} terminalContextTargetId={terminalContextTargetId} onWorkspaceContextMenu={(targetWorkspace, point) => { setTerminalActionRequest(null); setWorkspaceMenu({ workspace: targetWorkspace, point }); }} onTerminalContextMenu={(targetWorkspace, definition, point) => { setWorkspaceMenu(null); setTerminalActionRequest({ kind: "menu", target: { workspace: targetWorkspace, definition }, point }); }} onCreate={() => setDialog("createWorkspace")} onSettings={() => setDialog("settings")} />
+      <div
+        className={`app-body ${workspaceMovePending ? "workspace-move-pending" : ""}`}
+        aria-busy={workspaceMovePending}
+      >
+        <WorkspaceSidebar
+          workspaces={workspaces}
+          activeWorkspaceId={workspace?.id ?? null}
+          runtimes={runtimes}
+          errors={errors}
+          pendingStarts={pendingStarts}
+          pendingConnections={pendingConnections}
+          collapsed={sidebarCollapsed}
+          onSelect={(id) => void selectWorkspace(id)}
+          onSelectTerminal={(workspaceId, paneId, terminalId) => void selectSidebarTerminal(workspaceId, paneId, terminalId).catch(() => undefined)}
+          onReorderPinned={reorderPinnedWorkspaces}
+          terminalDrag={terminalDrag}
+          terminalDropWorkspaceId={terminalDropTarget?.workspaceId ?? null}
+          onTerminalDragOverWorkspace={previewTerminalDropWorkspace}
+          onTerminalDragLeaveWorkspace={cancelTerminalDropWorkspacePreview}
+          onTerminalDropWorkspace={dropTerminalOnWorkspace}
+          workspaceContextTargetId={workspaceMenu?.workspace.id ?? null}
+          terminalContextTargetId={terminalContextTargetId}
+          onWorkspaceContextMenu={(targetWorkspace, point) => { setTerminalActionRequest(null); setWorkspaceMenu({ workspace: targetWorkspace, point }); }}
+          onTerminalContextMenu={(targetWorkspace, definition, point) => { setWorkspaceMenu(null); setTerminalActionRequest({ kind: "menu", target: { workspace: targetWorkspace, definition }, point }); }}
+          onCreate={() => setDialog("createWorkspace")}
+          onSettings={() => setDialog("settings")}
+        />
         <main className="main-content">
-          {workspace ? <><WorkspaceHeader workspace={workspace} runtimes={runtimes} onNewTerminal={() => openNewTerminal(workspace)} /><div className="workspace-terminal-deck">{workspaces.map((item) => {
-            const isActive = item.id === workspace.id;
-            return <div key={item.id} className={`workspace-terminal-layer ${isActive ? "active" : "inactive"}`} aria-hidden={!isActive}>
+          {visibleWorkspace ? <><WorkspaceHeader workspace={visibleWorkspace} runtimes={runtimes} onNewTerminal={() => openNewTerminal(visibleWorkspace)} /><div className="workspace-terminal-deck">{workspaces.map((item) => {
+            const isVisible = item.id === visibleWorkspace.id;
+            const isDragSourceBehindPreview = Boolean(
+              terminalDrag
+              && dragPreviewWorkspaceId
+              && item.id === terminalDrag.sourceWorkspaceId,
+            );
+            return <div key={item.id} className={`workspace-terminal-layer ${isVisible ? "active" : "inactive"} ${isDragSourceBehindPreview ? "drag-source" : ""}`} aria-hidden={!isVisible}>
               <TerminalWorkspace
                 workspace={item}
-                visible={isActive}
-                layoutError={isActive ? layoutError : null}
-                terminalFocusRequest={isActive ? terminalFocusRequest : null}
+                visible={isVisible}
+                layoutError={isVisible ? layoutError : null}
+                terminalFocusRequest={isVisible ? terminalFocusRequest : null}
                 onDismissLayoutError={() => setLayoutError(null)}
                 onSelectTerminal={(paneId, terminalId) => selectTerminal(item, paneId, terminalId)}
                 onNewTerminal={(paneId) => openNewTerminal(item, paneId)}
                 onSplit={(paneId, direction) => split(item, paneId, direction)}
                 onRatioChange={(splitId, ratio) => ratioChange(item, splitId, ratio)}
-                onMoveTerminal={(sourcePaneId, targetPaneId, terminalId, targetIndex) => moveTerminalTab(item, sourcePaneId, targetPaneId, terminalId, targetIndex)}
                 onDeletePane={(paneId) => deletePane(item, paneId)}
                 onRenameTerminal={(terminalId, name) => renameTerminal(item, terminalId, name)}
                 terminalContextTargetId={terminalActionRequest?.kind === "menu" && terminalActionRequest.target.workspace.id === item.id ? terminalContextTargetId : null}
                 onTerminalContextMenu={(definition, point) => { setWorkspaceMenu(null); setTerminalActionRequest({ kind: "menu", target: { workspace: item, definition }, point }); }}
                 onOpenLauncherSettings={() => setDialog("settings")}
+                terminalDrag={terminalDrag}
+                terminalDropTarget={terminalDropTarget}
+                onTabDragStart={beginTerminalDrag}
+                onTabDragEnd={endTerminalDrag}
+                onTabDragOver={setTerminalDropTarget}
+                onTabDrop={(target) => void finishTerminalDrop(target)}
               />
             </div>;
-          })}</div></> : <EmptyState onCreate={() => setDialog("createWorkspace")} />}
+          })}<PersistentTerminalDeck workspaces={workspaces} visibleWorkspaceId={visibleWorkspaceId} terminalFocusRequest={terminalFocusRequest} /></div></> : <EmptyState onCreate={() => setDialog("createWorkspace")} />}
         </main>
       </div>
-      <StatusBar workspace={workspace} runtimes={runtimes} />
+      <StatusBar workspace={visibleWorkspace} runtimes={runtimes} />
 
       {dialog === "createWorkspace" && <CreateWorkspaceDialog platform={platform} windowsShells={windowsShells} nativeShells={nativeShells} wslDistributions={wslDistributions} launcherProfiles={launcherProfiles} globalDefaultLauncherId={settings.defaultLauncherProfileId} onClose={() => setDialog(null)} onCreate={createWorkspace} />}
       {dialog === "newTerminal" && newTerminalWorkspace && <NewTerminalDialog platform={platform} workspace={newTerminalWorkspace} windowsShells={windowsShells} nativeShells={nativeShells} wslDistributions={wslDistributions} launcherProfiles={launcherProfiles} globalDefaultLauncherId={settings.defaultLauncherProfileId} onClose={() => { setDialog(null); setNewTerminalTarget(null); }} onCreate={createTerminal} />}

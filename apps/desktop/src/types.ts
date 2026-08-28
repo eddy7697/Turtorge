@@ -140,6 +140,21 @@ export interface Workspace {
   openCount: number;
 }
 
+export interface WorkspaceMoveTerminalRequest {
+  sourceWorkspaceId: string;
+  sourcePaneId: string;
+  targetWorkspaceId: string;
+  targetPaneId: string;
+  terminalId: string;
+  targetIndex: number;
+}
+
+export interface WorkspaceMoveTerminalResult {
+  sourceWorkspace: Workspace;
+  targetWorkspace: Workspace;
+  runtime?: TerminalRuntimeSnapshot | null;
+}
+
 export interface WslDistribution {
   name: string;
   isDefault: boolean;

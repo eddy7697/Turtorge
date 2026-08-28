@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LayoutNode, ShellProfile, TerminalDefinition, TerminalRuntimeSnapshot, Workspace } from "../../types";
 import { WorkspaceSidebar } from "./WorkspaceSidebar";
@@ -84,6 +84,16 @@ const runtime = (definitionId: string, status: TerminalRuntimeSnapshot["status"]
   scrollback: [],
 });
 
+function dragDataTransfer() {
+  const data = new Map<string, string>();
+  return {
+    dropEffect: "none",
+    effectAllowed: "none",
+    getData: (type: string) => data.get(type) ?? "",
+    setData: (type: string, value: string) => data.set(type, value),
+  };
+}
+
 describe("WorkspaceSidebar", () => {
   afterEach(cleanup);
 
@@ -103,6 +113,7 @@ describe("WorkspaceSidebar", () => {
         collapsed={false}
         onSelect={vi.fn()}
         onSelectTerminal={onSelectTerminal}
+        onReorderPinned={vi.fn()}
         workspaceContextTargetId={null}
         terminalContextTargetId={null}
         onWorkspaceContextMenu={vi.fn()}
@@ -139,6 +150,7 @@ describe("WorkspaceSidebar", () => {
       collapsed: false,
       onSelect: vi.fn(),
       onSelectTerminal: vi.fn(),
+      onReorderPinned: vi.fn(),
       workspaceContextTargetId: null,
       terminalContextTargetId: null,
       onWorkspaceContextMenu: vi.fn(),
@@ -171,6 +183,7 @@ describe("WorkspaceSidebar", () => {
         collapsed={false}
         onSelect={onSelect}
         onSelectTerminal={onSelectTerminal}
+        onReorderPinned={vi.fn()}
         workspaceContextTargetId={null}
         terminalContextTargetId={null}
         onWorkspaceContextMenu={onWorkspaceContextMenu}
@@ -187,5 +200,236 @@ describe("WorkspaceSidebar", () => {
     fireEvent.contextMenu(screen.getByRole("button", { name: "TestPinned workspace" }), { clientX: 48, clientY: 64 });
     expect(onWorkspaceContextMenu).toHaveBeenCalledWith(expect.objectContaining({ id: "workspace-test" }), { x: 48, y: 64 });
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("shows an exact marker and reorders pinned workspaces without selecting or collapsing them", async () => {
+    const onSelect = vi.fn();
+    const onReorderPinned = vi.fn().mockResolvedValue(undefined);
+    const alpha = workspace("workspace-alpha", "Alpha");
+    const bravo = workspace("workspace-bravo", "Bravo");
+    const charlie = workspace("workspace-charlie", "Charlie");
+    const { container } = render(
+      <WorkspaceSidebar
+        workspaces={[alpha, bravo, charlie]}
+        activeWorkspaceId={bravo.id}
+        runtimes={{}}
+        errors={{}}
+        pendingConnections={{}}
+        collapsed={false}
+        onSelect={onSelect}
+        onSelectTerminal={vi.fn()}
+        onReorderPinned={onReorderPinned}
+        workspaceContextTargetId={null}
+        terminalContextTargetId={null}
+        onWorkspaceContextMenu={vi.fn()}
+        onTerminalContextMenu={vi.fn()}
+        onCreate={vi.fn()}
+        onSettings={vi.fn()}
+      />,
+    );
+
+    const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-pinned-workspace-id]"));
+    rows.forEach((row, index) => {
+      row.getBoundingClientRect = () => ({
+        top: index * 34,
+        bottom: index * 34 + 32,
+        left: 0,
+        right: 220,
+        width: 220,
+        height: 32,
+        x: 0,
+        y: index * 34,
+        toJSON: () => ({}),
+      });
+    });
+    const sidebar = container.querySelector<HTMLElement>(".sidebar-content")!;
+    Object.defineProperties(sidebar, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 500 },
+      scrollTop: { configurable: true, value: 0, writable: true },
+    });
+    sidebar.getBoundingClientRect = () => ({
+      top: 0,
+      bottom: 100,
+      left: 0,
+      right: 236,
+      width: 236,
+      height: 100,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+
+    const transfer = dragDataTransfer();
+    const list = screen.getByTestId("pinned-workspace-list");
+    const bravoRow = container.querySelector<HTMLElement>(`[data-pinned-workspace-id="${bravo.id}"]`)!;
+    fireEvent.dragStart(bravoRow, { dataTransfer: transfer });
+    const dragOverEvent = createEvent.dragOver(list, { dataTransfer: transfer });
+    Object.defineProperty(dragOverEvent, "clientY", { value: 98 });
+    fireEvent(list, dragOverEvent);
+
+    expect(container.querySelector(".workspace-insertion-marker")?.getAttribute("data-drop-index")).toBe("2");
+    expect(sidebar.scrollTop).toBe(14);
+    expect(screen.getByRole("group", { name: "Bravo terminals" })).toBeTruthy();
+
+    const dropEvent = createEvent.drop(list, { dataTransfer: transfer });
+    Object.defineProperty(dropEvent, "clientY", { value: 98 });
+    fireEvent(list, dropEvent);
+    await waitFor(() => expect(onReorderPinned).toHaveBeenCalledWith(bravo.id, 2));
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByRole("group", { name: "Bravo terminals" })).toBeTruthy();
+  });
+
+  it("does not make Recent workspaces draggable or accept a pinned drop in Recent", () => {
+    const pinnedWorkspace = workspace("workspace-pinned", "Pinned");
+    const recentWorkspace = {
+      ...workspace("workspace-recent", "Recent"),
+      pinned: false,
+      lastOpenedAt: "2026-08-20T00:00:00Z",
+    };
+    const onReorderPinned = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(
+      <WorkspaceSidebar
+        workspaces={[pinnedWorkspace, recentWorkspace]}
+        activeWorkspaceId={pinnedWorkspace.id}
+        runtimes={{}}
+        errors={{}}
+        pendingConnections={{}}
+        collapsed={false}
+        onSelect={vi.fn()}
+        onSelectTerminal={vi.fn()}
+        onReorderPinned={onReorderPinned}
+        workspaceContextTargetId={null}
+        terminalContextTargetId={null}
+        onWorkspaceContextMenu={vi.fn()}
+        onTerminalContextMenu={vi.fn()}
+        onCreate={vi.fn()}
+        onSettings={vi.fn()}
+      />,
+    );
+
+    const recentRow = screen.getByRole("button", { name: "Recent" }).closest<HTMLElement>(".workspace-item")!;
+    expect(recentRow.draggable).toBe(false);
+
+    const transfer = dragDataTransfer();
+    const pinnedRow = container.querySelector<HTMLElement>(`[data-pinned-workspace-id="${pinnedWorkspace.id}"]`)!;
+    fireEvent.dragStart(pinnedRow, { dataTransfer: transfer });
+    fireEvent.dragOver(recentRow, { clientY: 200, dataTransfer: transfer });
+    fireEvent.drop(recentRow, { clientY: 200, dataTransfer: transfer });
+    fireEvent.dragEnd(pinnedRow, { dataTransfer: transfer });
+
+    expect(onReorderPinned).not.toHaveBeenCalled();
+    expect(container.querySelector(".workspace-insertion-marker")).toBeNull();
+  });
+
+  it("accepts terminal drops on collapsed workspace icons without enabling workspace reorder", () => {
+    vi.useFakeTimers();
+    const source = workspace("workspace-source", "Source");
+    const target = workspace("workspace-target", "Target");
+    const onTerminalDragOverWorkspace = vi.fn();
+    const onTerminalDragLeaveWorkspace = vi.fn();
+    const onTerminalDropWorkspace = vi.fn();
+    const onReorderPinned = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(
+      <WorkspaceSidebar
+        workspaces={[source, target]}
+        activeWorkspaceId={source.id}
+        runtimes={{}}
+        errors={{}}
+        pendingConnections={{}}
+        collapsed
+        onSelect={vi.fn()}
+        onSelectTerminal={vi.fn()}
+        onReorderPinned={onReorderPinned}
+        terminalDrag={{
+          sourceWorkspaceId: source.id,
+          sourcePaneId: "pane-first",
+          terminalId: "terminal-visible",
+        }}
+        terminalDropWorkspaceId={target.id}
+        onTerminalDragOverWorkspace={onTerminalDragOverWorkspace}
+        onTerminalDragLeaveWorkspace={onTerminalDragLeaveWorkspace}
+        onTerminalDropWorkspace={onTerminalDropWorkspace}
+        workspaceContextTargetId={null}
+        terminalContextTargetId={null}
+        onWorkspaceContextMenu={vi.fn()}
+        onTerminalContextMenu={vi.fn()}
+        onCreate={vi.fn()}
+        onSettings={vi.fn()}
+      />,
+    );
+
+    const rows = container.querySelectorAll<HTMLElement>(".workspace-tree-item");
+    const targetRow = rows[1]!;
+    const targetItem = targetRow.querySelector<HTMLElement>(".workspace-item")!;
+    const targetButton = targetRow.querySelector<HTMLElement>(".workspace-select")!;
+    const transfer = dragDataTransfer();
+
+    expect(targetRow.classList.contains("terminal-drop-target")).toBe(true);
+    expect(targetItem.draggable).toBe(false);
+
+    fireEvent.dragOver(targetRow, { clientY: 20, dataTransfer: transfer });
+    expect(onTerminalDragOverWorkspace).toHaveBeenCalledWith(target.id);
+
+    try {
+      const nestedLeave = createEvent.dragLeave(targetRow, { dataTransfer: transfer });
+      Object.defineProperty(nestedLeave, "relatedTarget", { value: targetButton });
+      fireEvent(targetRow, nestedLeave);
+      expect(onTerminalDragLeaveWorkspace).not.toHaveBeenCalled();
+
+      const nullLeave = createEvent.dragLeave(targetRow, { dataTransfer: transfer });
+      Object.defineProperty(nullLeave, "relatedTarget", { value: null });
+      fireEvent(targetRow, nullLeave);
+      fireEvent.dragOver(targetRow, { clientY: 20, dataTransfer: transfer });
+      vi.advanceTimersByTime(50);
+      expect(onTerminalDragLeaveWorkspace).not.toHaveBeenCalled();
+
+      const outsideLeave = createEvent.dragLeave(targetRow, { dataTransfer: transfer });
+      Object.defineProperty(outsideLeave, "relatedTarget", { value: document.body });
+      fireEvent(targetRow, outsideLeave);
+      vi.advanceTimersByTime(50);
+      expect(onTerminalDragLeaveWorkspace).toHaveBeenCalledWith(target.id);
+
+      fireEvent.drop(targetRow, { dataTransfer: transfer });
+      expect(onTerminalDropWorkspace).toHaveBeenCalledWith(target.id);
+      expect(onReorderPinned).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the current order and shows a readable error when persistence fails", async () => {
+    const alpha = workspace("workspace-alpha", "Alpha");
+    const bravo = workspace("workspace-bravo", "Bravo");
+    const onReorderPinned = vi.fn().mockRejectedValue(new Error("Disk full"));
+    const { container } = render(
+      <WorkspaceSidebar
+        workspaces={[alpha, bravo]}
+        activeWorkspaceId={alpha.id}
+        runtimes={{}}
+        errors={{}}
+        pendingConnections={{}}
+        collapsed={false}
+        onSelect={vi.fn()}
+        onSelectTerminal={vi.fn()}
+        onReorderPinned={onReorderPinned}
+        workspaceContextTargetId={null}
+        terminalContextTargetId={null}
+        onWorkspaceContextMenu={vi.fn()}
+        onTerminalContextMenu={vi.fn()}
+        onCreate={vi.fn()}
+        onSettings={vi.fn()}
+      />,
+    );
+
+    const transfer = dragDataTransfer();
+    const list = screen.getByTestId("pinned-workspace-list");
+    const alphaRow = container.querySelector<HTMLElement>(`[data-pinned-workspace-id="${alpha.id}"]`)!;
+    fireEvent.dragStart(alphaRow, { dataTransfer: transfer });
+    fireEvent.dragOver(list, { clientY: 100, dataTransfer: transfer });
+    fireEvent.drop(list, { clientY: 100, dataTransfer: transfer });
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Could not reorder pinned workspaces. Disk full");
+    expect(container.querySelectorAll(".workspace-name")[0]?.textContent).toBe("Alpha");
   });
 });

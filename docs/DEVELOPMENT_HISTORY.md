@@ -1,7 +1,7 @@
 # Turtorge Development History
 
-Last updated: 2026-08-15
-Current stage: Terminal mouse selection now copies text directly to the system clipboard across profiles; Windows production build and terminal regression verification pass, while the previously recorded Clippy dead-code failure remains
+Last updated: 2026-08-28
+Current stage: Manual Pinned Workspace ordering and cross-Workspace terminal-tab moves are implemented with atomic persistence and live PTY/xterm preservation; automated frontend, production-frontend, and Rust verification pass, while native mouse acceptance, the unavailable local WSL precondition, and the previously recorded Clippy dead-code failure remain noted
 
 This document preserves the product and engineering context of the first Turtorge implementation cycle so future work can continue without reconstructing decisions from chat history.
 
@@ -45,7 +45,10 @@ The product direction was stress-tested with the user before implementation. The
 - Multi-line paste requires confirmation.
 - Closing a running terminal requires confirmation, with session-only suppression.
 - Leaf panes can be deleted, but the final pane in a workspace is protected. Deleting a non-empty pane always requires a bulk confirmation and collapses its parent split by promoting the sibling subtree.
-- Terminal tabs can be reordered within a pane and moved between panes in the same workspace. Cross-workspace drag-and-drop and keyboard tab movement remain deferred.
+- Terminal tabs can be reordered within a pane and moved between panes or Workspaces by drag and drop. Cross-Workspace moves preserve the same Rust runtime, PTY/process, xterm emulator, cursor, selection, and scrollback; keyboard tab movement remains deferred.
+- Dropping a terminal on a Workspace row appends it to that Workspace's first pane. Hovering a row for 600 ms previews the Workspace without changing Recent/open-count state, after which an exact pane and tab index can be chosen. A successful move selects the target Workspace and terminal; cancellation or failure returns to the source.
+- Cross-Workspace moves are blocked while the terminal is starting, stopping, or reconnecting. Source and target definitions/layouts persist in one atomic workspace-file transaction; a failed move leaves layout, runtime ownership, and active state unchanged. Moving the final tab keeps the source pane empty, and an active source tab chooses its right neighbor before its left neighbor.
+- Only Pinned Workspaces support manual drag ordering. Recent remains automatically ordered by last-open time, dragging never crosses the Pinned/Recent boundary or changes pin state, collapsed Sidebar mode disables Workspace ordering, and Quick Open uses the same persisted Pinned order. New Pinned Workspaces append to the end of the Pinned list.
 - Workspace rows can be expanded independently to show every saved terminal in pane/tab layout order. Selecting a child switches workspaces, activates its pane tab, and focuses xterm without starting an inactive terminal.
 - Sidebar terminal activity uses three states: green for starting/running/stopping, gray for never started or normal exit, and red for startup/runtime failure, disconnection errors, or non-zero exit. Workspace badges count only green states.
 - Workspace expansion is session-only. Selecting a workspace automatically expands it, multiple workspaces may remain expanded, and only the active workspace starts expanded after restart.
@@ -112,12 +115,13 @@ The source logo was not altered. `images/app-icon.png` and the Tauri platform ic
 - xterm.js 6
 - Fit and web-links addons
 - Application-controlled terminal tabs
-- Native mouse/trackpad tab drag-and-drop with exact insertion markers, pane drop highlighting, horizontal tab scrolling, and same-workspace cross-pane moves
+- Native mouse/trackpad tab drag-and-drop with exact insertion markers, pane drop highlighting, horizontal tab scrolling, same-Workspace cross-pane moves, direct cross-Workspace row drops, and 600 ms target-Workspace preview
+- A persistent terminal deck reparents the same xterm host between pane/Workspace slots so a cross-Workspace move never reconstructs the emulator or reconnects the live PTY
 - Full Edit Terminal flow for label, shell/profile, working directory, startup command, environment variables, auto-start, and external-launcher override; tab double-click remains quick rename
 - Nested horizontal and vertical split tree
 - Leaf-pane deletion with final-pane protection, transition blocking, bulk process confirmation, sibling-tree promotion, and visible persistence errors
 - Draggable split ratios
-- Workspace sidebar and quick open
+- Workspace sidebar and quick open, including persisted Pinned-only manual ordering while Recent remains recency-driven
 - Independently expandable workspace rows with all-terminal child navigation, layout-order traversal, active-pane highlighting, ellipsis tooltips, and accessible three-state runtime lights
 - Thin visible sidebar and terminal-tab scrollbars, including vertical-wheel-to-horizontal tab navigation and native horizontal gesture preservation
 - Custom-title-bar drag coverage across the empty action area while preserving interactive buttons
@@ -145,6 +149,8 @@ The source logo was not altered. `images/app-icon.png` and the Tauri platform ic
 - Typed Serde request, response, and Channel event contracts
 - `portable-pty` 0.9 over Windows ConPTY
 - Rust-owned terminal registry and process lifecycle
+- Atomic Workspace-order and cross-Workspace terminal-move commands with global ownership validation, source/target layout updates, target recency accounting, and single-file persistence
+- Definition-scoped lifecycle serialization across terminal start, close, move persistence, and runtime rehome; a delayed stale start re-resolves the persisted target Workspace owner/environment before spawning
 - Input, resize, graceful close, forced termination, and exit monitoring
 - Bounded 1 MiB in-memory byte scrollback per running terminal
 - Atomic JSON workspace and settings persistence
@@ -584,6 +590,21 @@ The 2026-08-15 terminal copy-on-select follow-up additionally passed:
 - Windows Clippy still fails only on the previously recorded unused macOS login-PATH helper; this follow-up introduced no additional warning
 - Automated native mouse dragging was not performed because the available Windows UI automation policy excludes terminal applications
 
+The 2026-08-28 Workspace-ordering and cross-Workspace terminal-move follow-up additionally established:
+
+- Pinned-only Workspace drag ordering with persisted order shared by the Sidebar and Quick Open; Recent remains recency-driven, cross-section ordering is rejected by the UI, and collapsed Sidebar mode keeps terminal-to-Workspace drops while disabling Workspace ordering
+- Direct first-pane Workspace-row drops, 600 ms non-opening hover preview, exact target pane/tab insertion after preview, target activation/focus on success, and source restoration on cancellation or failure
+- A persistent xterm host/slot layer that retains the same emulator instance across pane and Workspace ownership changes; Rust rehomes the same managed runtime without changing runtime ID, process ID, PTY, stream subscriber, live environment, or live working directory
+- One locked `workspaces.json` transaction for definition/layout ownership transfer and target recency accounting, plus definition-scoped lifecycle serialization that prevents start/stop/move races and re-resolves a delayed start against the persisted target Workspace environment
+- Frontend Vitest: 17 files and 82/82 tests, including App-level preview timing and in-flight gating, Sidebar expanded/collapsed drop behavior, persisted ordering, browser/native contract parity, store atomicity, source-tab fallback, and xterm reparent/disposal identity
+- TypeScript application compilation and Vite production build passed. The existing non-blocking JavaScript chunk-size warning remains.
+- Rust formatting passed. The default Rust suite passed 34 tests with the real WSL integration test ignored by default.
+- The opt-in Windows/WSL PTY test reached its WSL prerequisite after the Windows PTY smoke but could not complete because no user WSL distribution is installed on this host.
+- Clippy with warnings denied still fails only on the previously recorded Windows-unused `platform::login_shell_path_entries`; allowing that known dead-code baseline leaves no new Clippy warning.
+- Native WebView2 mouse-drag acceptance was not automated because the available Windows UI automation policy excludes terminal applications. No release executable was produced or replaced for this source-verified follow-up.
+
+Reusable lesson: moving a live terminal is an ownership transaction, not a restart. Persist both Workspace layouts before rehoming the runtime, keep the xterm host keyed by terminal definition rather than pane ownership, and serialize start/move lifecycle work by definition so a delayed start cannot recreate the terminal under stale Workspace context.
+
 ## 7. Delivery state
 
 The first complete project commit is:
@@ -649,7 +670,7 @@ The following work was deliberately excluded from this MVP:
 - Diagnostic export archive
 - Git Bash, SSH, container, and remote adapters
 - Bundle code splitting and performance tuning beyond the MVP target
-- Keyboard commands for moving terminal tabs and cross-workspace tab drag-and-drop
+- Keyboard commands for moving terminal tabs
 - Command-palette or keyboard-shortcut access to external launchers
 
 These are future phases, not incomplete items from the approved Windows MVP.

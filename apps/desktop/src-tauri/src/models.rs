@@ -235,6 +235,25 @@ pub struct Workspace {
     pub open_count: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMoveTerminalRequest {
+    pub source_workspace_id: String,
+    pub source_pane_id: String,
+    pub target_workspace_id: String,
+    pub target_pane_id: String,
+    pub terminal_id: String,
+    pub target_index: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMoveTerminalResult {
+    pub source_workspace: Workspace,
+    pub target_workspace: Workspace,
+    pub runtime: Option<TerminalRuntimeSnapshot>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WslDistribution {
@@ -329,7 +348,7 @@ pub fn merge_environment(
 mod tests {
     use super::{
         AppSettings, DesktopPlatform, LayoutNode, PathKind, ShellKind, TerminalDefinition,
-        TerminalEvent,
+        TerminalEvent, WorkspaceMoveTerminalRequest,
     };
 
     #[test]
@@ -433,5 +452,25 @@ mod tests {
         );
         assert_eq!(serde_json::to_value(PathKind::Native).unwrap(), "native");
         assert_eq!(serde_json::to_value(ShellKind::Native).unwrap(), "native");
+    }
+
+    #[test]
+    fn workspace_move_terminal_request_accepts_camel_case_fields() {
+        let request: WorkspaceMoveTerminalRequest = serde_json::from_value(serde_json::json!({
+            "sourceWorkspaceId": "workspace-source",
+            "sourcePaneId": "pane-source",
+            "targetWorkspaceId": "workspace-target",
+            "targetPaneId": "pane-target",
+            "terminalId": "terminal-1",
+            "targetIndex": 2
+        }))
+        .expect("valid workspace move request");
+
+        assert_eq!(request.source_workspace_id, "workspace-source");
+        assert_eq!(request.source_pane_id, "pane-source");
+        assert_eq!(request.target_workspace_id, "workspace-target");
+        assert_eq!(request.target_pane_id, "pane-target");
+        assert_eq!(request.terminal_id, "terminal-1");
+        assert_eq!(request.target_index, 2);
     }
 }
