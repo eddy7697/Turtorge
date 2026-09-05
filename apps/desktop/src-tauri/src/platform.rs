@@ -35,6 +35,40 @@ pub fn current_platform() -> DesktopPlatform {
     return DesktopPlatform::Linux;
 }
 
+/// ConPTY host files that `portable-pty` sideloads from the executable directory.
+///
+/// They are vendored under `vendor/conpty/win-x64` and staged beside the executable by
+/// `build.rs`. Both must be present together because `conpty.dll` starts `OpenConsole.exe`
+/// from its own directory. Without them Windows falls back to the inbox ConPTY, which corrupts
+/// full-width TUI redraws (k9s, Claude Code, Codex).
+pub const CONPTY_HOST_FILES: [&str; 2] = ["conpty.dll", "OpenConsole.exe"];
+
+/// Which ConPTY implementation a Windows executable directory will load.
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConptyHost {
+    /// Both vendored host files sit next to the executable and will be preferred.
+    Sideloaded,
+    /// Neither host file is present; the Windows-inbox `kernel32.dll` ConPTY is used.
+    Inbox,
+    /// Only part of the host is present; `conpty.dll` may load but fail to start its console.
+    Incomplete { missing: Vec<String> },
+}
+
+#[cfg(windows)]
+pub fn conpty_host_for_executable_dir(executable_dir: &Path) -> ConptyHost {
+    let missing = CONPTY_HOST_FILES
+        .iter()
+        .filter(|file| !executable_dir.join(file).is_file())
+        .map(|file| (*file).to_owned())
+        .collect::<Vec<_>>();
+    match missing.len() {
+        0 => ConptyHost::Sideloaded,
+        count if count == CONPTY_HOST_FILES.len() => ConptyHost::Inbox,
+        _ => ConptyHost::Incomplete { missing },
+    }
+}
+
 fn command_output(mut command: Command) -> Result<Output, TurtorgeError> {
     configure_background_command(&mut command);
     command
@@ -676,6 +710,74 @@ fn expand_wsl_home_path(path: &str, distribution: &str) -> Result<String, Turtor
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const VENDORED_CONPTY_SIZES: [(&str, u64); 2] =
+        [("conpty.dll", 109_600), ("OpenConsole.exe", 1_148_448)];
+
+    #[test]
+    fn vendored_conpty_host_files_are_present_and_intact() {
+        let vendor_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("vendor")
+            .join("conpty")
+            .join("win-x64");
+        for (file, expected_size) in VENDORED_CONPTY_SIZES {
+            let metadata = std::fs::metadata(vendor_dir.join(file))
+                .unwrap_or_else(|error| panic!("vendored {file} is missing: {error}"));
+            assert_eq!(metadata.len(), expected_size, "{file} size changed");
+        }
+        assert!(vendor_dir.join("LICENSE").is_file());
+        assert_eq!(
+            VENDORED_CONPTY_SIZES.map(|(file, _)| file),
+            CONPTY_HOST_FILES
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn build_stages_the_conpty_host_beside_the_executable() {
+        let exe = std::env::current_exe().expect("test executable path");
+        let mut profile_dir = exe
+            .parent()
+            .expect("test executable directory")
+            .to_path_buf();
+        if profile_dir.file_name().is_some_and(|name| name == "deps") {
+            profile_dir.pop();
+        }
+        assert_eq!(
+            conpty_host_for_executable_dir(&profile_dir),
+            ConptyHost::Sideloaded,
+            "build.rs did not stage the ConPTY host into {}",
+            profile_dir.display()
+        );
+        for (file, expected_size) in VENDORED_CONPTY_SIZES {
+            let staged = std::fs::metadata(profile_dir.join(file)).expect("staged file");
+            assert_eq!(
+                staged.len(),
+                expected_size,
+                "staged {file} differs from vendor"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn conpty_host_detection_reports_inbox_and_incomplete_directories() {
+        let dir = std::env::temp_dir().join(format!("turtorge-conpty-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        assert_eq!(conpty_host_for_executable_dir(&dir), ConptyHost::Inbox);
+
+        std::fs::write(dir.join("conpty.dll"), b"stub").expect("stub dll");
+        assert_eq!(
+            conpty_host_for_executable_dir(&dir),
+            ConptyHost::Incomplete {
+                missing: vec!["OpenConsole.exe".to_owned()]
+            }
+        );
+
+        std::fs::write(dir.join("OpenConsole.exe"), b"stub").expect("stub host");
+        assert_eq!(conpty_host_for_executable_dir(&dir), ConptyHost::Sideloaded);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn decodes_utf16le_wsl_output() {

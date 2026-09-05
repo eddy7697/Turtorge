@@ -19,6 +19,32 @@ pub struct AppState {
     terminals: Arc<TerminalManager>,
 }
 
+/// Records which ConPTY implementation this process will use. The sideloaded host is the
+/// supported configuration; the inbox fallback keeps working but corrupts full-width TUI redraws.
+#[cfg(windows)]
+fn log_conpty_host() {
+    let executable_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    let Some(executable_dir) = executable_dir else {
+        tracing::warn!("cannot resolve the executable directory to check the ConPTY host");
+        return;
+    };
+    match platform::conpty_host_for_executable_dir(&executable_dir) {
+        platform::ConptyHost::Sideloaded => {
+            tracing::info!("using the sideloaded ConPTY host next to the executable");
+        }
+        platform::ConptyHost::Inbox => tracing::warn!(
+            "conpty.dll and OpenConsole.exe are missing next to the executable; \
+             falling back to the Windows-inbox ConPTY, which corrupts full-width TUI redraws"
+        ),
+        platform::ConptyHost::Incomplete { missing } => tracing::error!(
+            ?missing,
+            "the sideloaded ConPTY host is incomplete; terminal startup may fail"
+        ),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = tracing_subscriber::fmt()
@@ -26,6 +52,8 @@ pub fn run() {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("turtorge=info")),
         )
         .try_init();
+    #[cfg(windows)]
+    log_conpty_host();
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())

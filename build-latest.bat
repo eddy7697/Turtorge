@@ -62,7 +62,18 @@ if not exist "%OUTPUT_EXE%" (
     exit /b 1
 )
 
+for %%F in (conpty.dll OpenConsole.exe) do (
+    if not exist "%CARGO_TARGET_DIR%\release\%%F" (
+        echo.
+        echo [ERROR] The build completed without the sideloaded ConPTY host file:
+        echo         %CARGO_TARGET_DIR%\release\%%F
+        echo Without it Turtorge falls back to the Windows-inbox ConPTY, which corrupts TUI redraws.
+        exit /b 1
+    )
+)
+
 echo.
 echo [SUCCESS] The latest standalone release is ready:
 echo           %OUTPUT_EXE%
+echo           Ship it together with conpty.dll and OpenConsole.exe from the same folder.
 exit /b 0

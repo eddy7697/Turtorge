@@ -1,7 +1,7 @@
 # Turtorge Development History
 
-Last updated: 2026-08-28
-Current stage: Manual Pinned Workspace ordering and cross-Workspace terminal-tab moves are implemented with atomic persistence and live PTY/xterm preservation; automated frontend, Rust, and isolated Windows production-build verification pass, while native mouse acceptance, the unavailable local WSL precondition, and the previously recorded Clippy dead-code failure remain noted
+Last updated: 2026-09-05
+Current stage: Windows builds sideload the vendored `microsoft/terminal` ConPTY host beside `turtorge.exe`, which removed the k9s/Claude Code/Codex one-column TUI corruption that the inbox ConPTY produced; automated frontend, Rust, opt-in real WSL PTY, and isolated Windows production-build verification pass, while native mouse acceptance and the previously recorded Clippy dead-code failure remain noted
 
 This document preserves the product and engineering context of the first Turtorge implementation cycle so future work can continue without reconstructing decisions from chat history.
 
@@ -82,6 +82,7 @@ The product direction was stress-tested with the user before implementation. The
 - Release bundles must explicitly reference the generated turtle `.icns` and `.ico`; merely keeping icon files in the Tauri icon directory is not sufficient evidence that macOS embeds or displays them.
 - Terminal renderer padding is platform-specific. Windows keeps the established spacing on the xterm host so the renderer itself has no visible frame; macOS keeps the padding on `.xterm` so FitAddon includes it in row calculations and avoids bottom clipping.
 - Completing a mouse selection in any terminal copies the selected text directly to the system clipboard. This behavior belongs to the shared xterm layer rather than the Claude Code profile because AI tools may also be launched from ordinary shell terminals. Turtorge requests clipboard text-write permission only and does not read clipboard contents for this behavior.
+- The Windows deliverable is one folder holding `turtorge.exe`, `conpty.dll`, and `OpenConsole.exe`. Turtorge sideloads this newer MIT-licensed console host from `microsoft/terminal` because the Windows-inbox ConPTY corrupts full-width TUI redraws. The executable still starts without the two files but then falls back to the inbox host and logs a warning; the release helper refuses to report success without them.
 
 ## 3. Design phase
 
@@ -147,7 +148,7 @@ The source logo was not altered. `images/app-icon.png` and the Tauri platform ic
 
 - Tauri v2 command boundary
 - Typed Serde request, response, and Channel event contracts
-- `portable-pty` 0.9 over Windows ConPTY
+- `portable-pty` 0.9 over Windows ConPTY, preferring the vendored `conpty.dll`/`OpenConsole.exe` 1.23.2510.08001 that `build.rs` stages beside the executable; startup logs whether the sideloaded or inbox host is active
 - Rust-owned terminal registry and process lifecycle
 - Atomic Workspace-order and cross-Workspace terminal-move commands with global ownership validation, source/target layout updates, target recency accounting, and single-file persistence
 - Definition-scoped lifecycle serialization across terminal start, close, move persistence, and runtime rehome; a delayed stale start re-resolves the persisted target Workspace owner/environment before spawning
@@ -318,6 +319,21 @@ The durable fix is:
 - On reveal, run `FitAddon.fit()`, refresh the complete visible row range, and focus only the newly visible terminal.
 - Keep Rust snapshot replay for genuine attachment and recovery, not as the normal mechanism for switching views.
 - Avoid reconnecting merely because the stored runtime snapshot object changed.
+
+### The Windows-inbox ConPTY corrupts full-width TUI redraws
+
+After the persistent-emulator fix, k9s running in WSL still broke on Windows 11 without any tab switch: returning from a pod shell to the k9s screen placed the left table border in the last column of the previous row and shifted the rest of that row one column left. Claude Code and Codex showed milder displacement after tab switches. Any window resize repaired every case because ConPTY re-emits its entire buffer on resize. Tracing the tab-switch path showed that the frontend only persists the active tab and refreshes xterm while Rust never touches the PTY, so the corruption had to originate between the WSL process and xterm.js: the inbox ConPTY (conhost 10.0.26100) re-synthesizes VT output from its own screen buffer and mishandles the last-column pending-wrap state during full-width redraws. Windows Terminal and VS Code avoid the same defect by bundling a newer console host.
+
+Evidence: the identical `c061f2e` executable reproduced the k9s corruption with the inbox ConPTY and rendered correctly once `conpty.dll` and `OpenConsole.exe` 1.23.2510.08001 were placed beside it, which `portable-pty` prefers automatically.
+
+Resolution:
+
+- Vendor the MIT-licensed `conpty.dll` and `OpenConsole.exe` from `microsoft/terminal` (obtained from the `node-pty` 1.1.0 package) under `apps/desktop/src-tauri/vendor/conpty/win-x64` with recorded sizes, hashes, license, and update steps.
+- Stage both files into the Cargo profile directory from `build.rs` on Windows x64 so `tauri dev`, `tauri build --no-bundle`, and `build-latest.bat` all place them next to `turtorge.exe`; never ship one file without the other.
+- Log the active ConPTY host at startup, fail `build-latest.bat` when either file is missing, and keep a Rust regression test over the vendored files and the staged copies.
+- Treat the Windows deliverable as a three-file folder rather than a single executable.
+
+Reusable lesson: a TUI that renders one column off and heals on window resize is a ConPTY host defect, not an xterm.js or FitAddon problem. Compare the same executable with and without the sideloaded host before changing the renderer.
 
 ### External launchers need typed arguments and separate path semantics
 
@@ -606,6 +622,16 @@ The 2026-08-28 Workspace-ordering and cross-Workspace terminal-move follow-up ad
 
 Reusable lesson: moving a live terminal is an ownership transaction, not a restart. Persist both Workspace layouts before rehoming the runtime, keep the xterm host keyed by terminal definition rather than pane ownership, and serialize start/move lifecycle work by definition so a delayed start cannot recreate the terminal under stale Workspace context.
 
+The 2026-09-05 sideloaded-ConPTY follow-up additionally established:
+
+- Native A/B acceptance by the user: the unchanged `c061f2e` executable corrupted the k9s screen after a pod-shell round trip in WSL with the inbox ConPTY and rendered correctly with `conpty.dll` and `OpenConsole.exe` 1.23.2510.08001 beside it; tab-switch displacement in Claude Code and Codex was the same defect
+- Frontend Vitest: 17 files and 82/82 tests; TypeScript compilation and Vite production build passed with only the known non-blocking chunk-size warning
+- Rust formatting passed. The default Rust suite passed 37 tests (three new: vendored host files present and intact, `build.rs` staged both files beside the test profile executable, and inbox/incomplete/sideloaded directory detection) with the real WSL integration test ignored by default
+- The opt-in real PowerShell/WSL PTY round trip passed 1/1 on a rerun; its first run failed only at the final five-second zsh exit wait while the release build was saturating the CPU, after the PTY marker had already been received
+- Clippy with warnings denied still fails only on the previously recorded Windows-unused `platform::login_shell_path_entries`; this follow-up introduced no new warning
+- `build-latest.bat` completed the Tauri CLI `--no-bundle` build, verified both host files in the release folder, and produced `artifacts/2026-09-05_18-53-09_734/release/turtorge.exe`, 5,458,944 bytes, SHA-256 `E99355136E797F9CF10A6FA06CE52AF2B6029AEECEF099AC694EF5174D9D9AD5`, alongside `conpty.dll` (SHA-256 `7C7430632052FF703540B68371EC43821820AA1335D8E11DFBCD9FF00E9DAAED`) and `OpenConsole.exe` (SHA-256 `D1FE7FAA62F9E955E2AC2371F95D7E5513DF4D496255097158F979C94782C5FC`)
+- Known follow-up, not yet fixed: `XtermView.tsx` shares one `resizeTimer` between the ResizeObserver-driven fit and the xterm `onResize`-driven PTY resize, so a burst of resize events can cancel the pending PTY resize and leave xterm and the PTY at different sizes until the next size change
+
 ## 7. Delivery state
 
 The first complete project commit is:
@@ -659,6 +685,8 @@ The Windows terminal-frame follow-up produced `artifacts/2026-08-13_08-31-12_203
 The Windows terminal copy-on-select follow-up produced `artifacts/2026-08-16_02-34-47_405/release/turtorge.exe`, size 5,416,448 bytes, SHA-256 `DFD1ACECCC7592D4529ED906EFC2AA5B608C57F4035BFA9EDF12D8E7F0BA1058`. It embeds native clipboard text-write support without replacing the standard release executable.
 
 The Windows Workspace-ordering and cross-Workspace terminal-move follow-up was committed as `c061f2e` and produced `artifacts/2026-08-28_10-53-06_688/release/turtorge.exe`, size 5,453,312 bytes, SHA-256 `B90266E3533483171DB3CD3EAB7ED257BCA81AFF7849CC9EC79B12392894732D`. The isolated build embeds the production frontend and Rust/Tauri implementation without replacing the standard release executable; native mouse-drag acceptance remains pending.
+
+The Windows sideloaded-ConPTY follow-up produced `artifacts/2026-09-05_18-53-09_734/release/` containing `turtorge.exe` (5,458,944 bytes, SHA-256 `E99355136E797F9CF10A6FA06CE52AF2B6029AEECEF099AC694EF5174D9D9AD5`), `conpty.dll`, and `OpenConsole.exe`. All three files must be shipped together from one folder; the Windows deliverable is no longer a single executable. Earlier Windows artifacts remain valid but use the inbox ConPTY unless the two host files are copied beside them.
 
 ## 8. Deferred scope
 
